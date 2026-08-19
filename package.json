@@ -1,0 +1,52 @@
+{
+  "name": "garmin-connect-mcp",
+  "version": "0.1.0",
+  "description": "A local MCP server for Garmin Connect health and fitness data",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "bin": {
+    "garmin-connect-mcp": "dist/src/index.js",
+    "garmin-export-session": "dist/scripts/export-session.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "tsc --build --clean tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/src/index.js",
+    "export-session": "tsx scripts/export-session.ts",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "garmin",
+    "garmin-connect",
+    "mcp",
+    "model-context-protocol",
+    "fitness",
+    "health"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/getsomecat/garmin-connect-mcp.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "dotenv": "^17.4.2",
+    "garmin-connect": "^1.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3"
+  }
+}
