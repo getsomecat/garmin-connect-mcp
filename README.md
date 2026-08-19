@@ -1,6 +1,6 @@
 # Garmin Connect MCP Server
 
-A local, read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for Garmin Connect. It exposes recent activities, sleep, steps, heart rate, weight, workouts, and profile data to Codex and other MCP clients.
+A read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for Garmin Connect. It exposes recent activities, sleep, steps, heart rate, weight, workouts, and profile data to Codex and other MCP clients. It supports local stdio and private Streamable HTTP deployments.
 
 This first version is written in TypeScript with the MCP SDK, `garmin-connect`, and `dotenv`. It has no DeepSeek Harness or Cordis dependency.
 
@@ -104,6 +104,54 @@ Use the same stdio command:
 }
 ```
 
+## Private Streamable HTTP deployment
+
+The HTTP transport is intended to run behind an HTTPS reverse proxy. It is stateless, uses JSON responses, and requires a bearer token of at least 32 bytes.
+
+Generate an independent MCP bearer token (this is not the Garmin session token):
+
+```bash
+openssl rand -hex 32
+```
+
+Configure the server environment:
+
+```dotenv
+MCP_TRANSPORT=http
+MCP_HTTP_HOST=127.0.0.1
+MCP_HTTP_PORT=3100
+MCP_HTTP_PATH=/mcp
+MCP_BEARER_TOKEN=the-generated-bearer-token
+```
+
+Build and start it:
+
+```bash
+npm ci
+npm run build
+npm start
+```
+
+Keep the Node.js listener on loopback and expose only the HTTPS reverse proxy. Example systemd and Nginx snippets are provided in `deploy/systemd` and `deploy/nginx`.
+
+On the Codex client, keep the bearer token in an environment variable and reference it from `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.garmin_connect]
+url = "https://garmin.example.com/mcp"
+bearer_token_env_var = "GARMIN_MCP_BEARER_TOKEN"
+startup_timeout_sec = 20
+tool_timeout_sec = 120
+```
+
+The client environment variable must contain the same independent bearer token:
+
+```bash
+export GARMIN_MCP_BEARER_TOKEN='the-generated-bearer-token'
+```
+
+Do not use the Garmin session token as the HTTP bearer token. Do not expose the Node.js port publicly, put secrets in Nginx configuration, or deploy the HTTP transport without HTTPS.
+
 ## Configuration
 
 | Variable | Default | Description |
@@ -119,6 +167,11 @@ Use the same stdio command:
 | `GARMIN_RETRY_MAX_DELAY_MS` | `30000` | Maximum backoff delay |
 | `GARMIN_ACTIVITY_DETAIL` | `compact` | Default activity output: `compact` or `full` |
 | `GARMIN_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
+| `MCP_TRANSPORT` | `stdio` | `stdio` for a local process or `http` for Streamable HTTP |
+| `MCP_HTTP_HOST` | `127.0.0.1` | HTTP bind address; keep loopback when using a reverse proxy |
+| `MCP_HTTP_PORT` | `3100` | Internal HTTP listen port |
+| `MCP_HTTP_PATH` | `/mcp` | Streamable HTTP endpoint path |
+| `MCP_BEARER_TOKEN` | — | Required in HTTP mode; independent secret of at least 32 bytes |
 
 The client de-duplicates concurrent requests, caches successful responses, reloads with username/password after a `401` or `403`, and applies bounded exponential backoff after a `429`. If token-only authentication expires, export a fresh token or temporarily configure username/password.
 
@@ -126,6 +179,7 @@ The client de-duplicates concurrent requests, caches successful responses, reloa
 
 ```bash
 npm run build
+npm run smoke:http
 npm run dev
 ```
 

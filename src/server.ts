@@ -8,8 +8,7 @@ import type { Config } from './config.js'
 import { GarminClient } from './garmin/client.js'
 import { createTools } from './tools/index.js'
 
-export function createServer(config: Config): Server {
-  const client = new GarminClient(config)
+export function createServer(config: Config, client: GarminClient = new GarminClient(config)): Server {
   const tools = createTools(client, config.activityDetail)
   const toolsByName = new Map(tools.map((tool) => [tool.definition.name, tool]))
 
