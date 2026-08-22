@@ -3,6 +3,7 @@
 The Garmin mobile SSO and OAuth flow in `src/garmin/auth.ts` follows protocol
 behavior documented by these MIT-licensed projects:
 
+- `python-garminconnect`, copyright (c) 2020-2026 Ron Klinkien
 - `garth`, copyright (c) 2023 Matin Tamizi
 - `garmin-connect`, copyright (c) 2020 Oskar Bernberg
 
@@ -30,6 +31,6 @@ The following license applies to `garth`:
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
-The same MIT terms apply to `garmin-connect`, copyright (c) 2020 Oskar
-Bernberg. This project's own license remains the repository's existing MIT
-LICENSE.
+The same MIT terms apply to `python-garminconnect`, copyright (c) 2020-2026
+Ron Klinkien, and to `garmin-connect`, copyright (c) 2020 Oskar Bernberg. This
+project's own license remains the repository's existing MIT LICENSE.

@@ -70,14 +70,20 @@ export function formatHeartRate(raw: JsonObject, requestedDate: string): JsonObj
 }
 
 export function formatWeight(raw: JsonObject, requestedDate: string): JsonObject {
+  const entries = Array.isArray(raw.dateWeightList) ? raw.dateWeightList : []
+  const latest = entries.length > 0 ? asObject(entries.at(-1)) : {}
+  const average = asObject(raw.totalAverage)
+  const value = Object.keys(latest).length > 0
+    ? latest
+    : Object.keys(average).length > 0 ? average : raw
   return {
-    date: timestampDate(raw.date) ?? stringValue(raw.calendarDate, requestedDate),
-    weightKg: gramsToKg(raw.weight),
-    bmi: finiteNumber(raw.bmi),
-    bodyFatPercentage: finiteNumber(raw.bodyFat),
-    muscleMassKg: gramsToKg(raw.muscleMass),
-    waterPercentage: finiteNumber(raw.bodyWater),
-    boneMassKg: gramsToKg(raw.boneMass),
+    date: timestampDate(value.date) ?? stringValue(value.calendarDate, requestedDate),
+    weightKg: gramsToKg(value.weight),
+    bmi: finiteNumber(value.bmi),
+    bodyFatPercentage: finiteNumber(value.bodyFat),
+    muscleMassKg: gramsToKg(value.muscleMass),
+    waterPercentage: finiteNumber(value.bodyWater),
+    boneMassKg: gramsToKg(value.boneMass),
   }
 }
 

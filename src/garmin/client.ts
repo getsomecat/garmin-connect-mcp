@@ -2,9 +2,12 @@ import garminConnectPackage from 'garmin-connect'
 import type { Config, LogLevel } from '../config.js'
 import { MemoryCache } from '../utils/cache.js'
 import {
+  garminApiHeaders,
+  isDiSessionToken,
   loginForSession,
   parseSessionToken,
   refreshSessionToken,
+  sessionNeedsRefresh,
   type GarminSessionToken,
 } from './auth.js'
 
@@ -32,7 +35,11 @@ export class GarminClient {
   }
 
   async connect(forcePasswordLogin = false): Promise<void> {
-    if (this.connected && !forcePasswordLogin) return
+    if (
+      this.connected
+      && !forcePasswordLogin
+      && (!this.sessionToken || !sessionNeedsRefresh(this.sessionToken))
+    ) return
     if (!this.connecting) {
       this.connecting = this.login(forcePasswordLogin).finally(() => {
         this.connecting = undefined
@@ -42,31 +49,53 @@ export class GarminClient {
   }
 
   async getActivities(offset = 0, limit = 10): Promise<unknown[]> {
-    return this.cached(`activities:${offset}:${limit}`, () => this.client.getActivities(offset, limit))
+    return this.cached(`activities:${offset}:${limit}`, async () => {
+      if (!this.isDiSession()) return this.client.getActivities(offset, limit)
+      return asArray(await this.apiGet('/activitylist-service/activities/search/activities', {
+        start: offset,
+        limit,
+      }))
+    })
   }
 
   async getSleep(date: string): Promise<unknown> {
-    return this.cached(`sleep:${date}`, () => this.client.getSleepData(toLocalDate(date)))
+    return this.cached(`sleep:${date}`, () => this.isDiSession()
+      ? this.apiGet('/sleep-service/sleep/dailySleepData', { date })
+      : this.client.getSleepData(toLocalDate(date)))
   }
 
   async getSteps(date: string): Promise<unknown> {
-    return this.cached(`steps:${date}`, () => this.client.getSteps(toLocalDate(date)))
+    return this.cached(`steps:${date}`, async () => {
+      if (!this.isDiSession()) return this.client.getSteps(toLocalDate(date))
+      const days = asArray(await this.apiGet(`/usersummary-service/stats/steps/daily/${date}/${date}`))
+      return days.find((day) => asRecord(day).calendarDate === date)
+        ?? { calendarDate: date, totalSteps: 0 }
+    })
   }
 
   async getHeartRate(date: string): Promise<unknown> {
-    return this.cached(`heart-rate:${date}`, () => this.client.getHeartRate(toLocalDate(date)))
+    return this.cached(`heart-rate:${date}`, () => this.isDiSession()
+      ? this.apiGet('/wellness-service/wellness/dailyHeartRate', { date })
+      : this.client.getHeartRate(toLocalDate(date)))
   }
 
   async getWeight(date: string): Promise<unknown> {
-    return this.cached(`weight:${date}`, () => this.client.getDailyWeightData(toLocalDate(date)))
+    return this.cached(`weight:${date}`, () => this.isDiSession()
+      ? this.apiGet(`/weight-service/weight/dayview/${date}`)
+      : this.client.getDailyWeightData(toLocalDate(date)))
   }
 
   async getWorkouts(offset = 0, limit = 10): Promise<unknown[]> {
-    return this.cached(`workouts:${offset}:${limit}`, () => this.client.getWorkouts(offset, limit))
+    return this.cached(`workouts:${offset}:${limit}`, async () => {
+      if (!this.isDiSession()) return this.client.getWorkouts(offset, limit)
+      return asArray(await this.apiGet('/workout-service/workouts', { start: offset, limit }))
+    })
   }
 
   async getProfile(): Promise<unknown> {
-    return this.cached('profile', () => this.client.getUserProfile())
+    return this.cached('profile', () => this.isDiSession()
+      ? this.apiGet('/userprofile-service/socialProfile')
+      : this.client.getUserProfile())
   }
 
   async exportSession(): Promise<string> {
@@ -131,10 +160,44 @@ export class GarminClient {
   }
 
   private loadSessionToken(token: GarminSessionToken): void {
+    if (isDiSessionToken(token)) return
     this.client.loadToken(
       token.oauth1 as unknown as Parameters<GarminConnectClient['loadToken']>[0],
       token.oauth2 as unknown as Parameters<GarminConnectClient['loadToken']>[1],
     )
+  }
+
+  private isDiSession(): boolean {
+    return Boolean(this.sessionToken && isDiSessionToken(this.sessionToken))
+  }
+
+  private async apiGet(
+    path: string,
+    params: Record<string, string | number> = {},
+  ): Promise<unknown> {
+    const session = this.sessionToken
+    if (!session || !isDiSessionToken(session)) {
+      throw new Error('A Garmin DI session is required for this API request.')
+    }
+
+    const domain = this.config.region === 'cn' ? 'garmin.cn' : 'garmin.com'
+    const url = new URL(`https://connectapi.${domain}${path}`)
+    for (const [name, value] of Object.entries(params)) url.searchParams.set(name, String(value))
+
+    const response = await fetch(url, {
+      headers: {
+        ...garminApiHeaders(),
+        Authorization: `Bearer ${session.access_token}`,
+        Accept: 'application/json',
+      },
+    })
+    if (!response.ok) throw new GarminHttpError(response)
+    if (response.status === 204) return null
+    try {
+      return await response.json()
+    } catch {
+      throw new Error(`Garmin API returned invalid JSON for ${path}.`)
+    }
   }
 
   private async withRetry<T>(request: () => Promise<T>): Promise<T> {
@@ -223,4 +286,30 @@ function retryAfterMs(error: unknown): number | undefined {
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function asArray(value: unknown): unknown[] {
+  if (!Array.isArray(value)) throw new Error('Garmin API returned an unexpected non-array response.')
+  return value
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+class GarminHttpError extends Error {
+  readonly status: number
+  readonly response: { status: number; headers: Record<string, string> }
+
+  constructor(response: Response) {
+    super(`Garmin API request failed with HTTP ${response.status}.`)
+    this.name = 'GarminHttpError'
+    this.status = response.status
+    const headers: Record<string, string> = {}
+    const retryAfter = response.headers.get('retry-after')
+    if (retryAfter) headers['retry-after'] = retryAfter
+    this.response = { status: response.status, headers }
+  }
 }
