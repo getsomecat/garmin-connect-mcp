@@ -14,6 +14,7 @@
     "deploy",
     "README.md",
     "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
     ".env.example"
   ],
   "scripts": {
@@ -44,7 +45,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "dotenv": "^17.4.2",
-    "garmin-connect": "^1.6.2"
+    "garmin-connect": "^1.6.2",
+    "oauth-1.0a": "^2.2.6"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

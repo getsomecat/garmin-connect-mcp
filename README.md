@@ -59,6 +59,8 @@ umask 077
 npm run --silent export-session > session-token.txt
 ```
 
+If Garmin requires multi-factor authentication, the script prompts for the one-time code sent by email, SMS, or your authenticator app. The code is used only for that login.
+
 3. Copy the JSON value from `session-token.txt` into `GARMIN_SESSION_TOKEN` in `.env`.
 4. Remove `GARMIN_PASSWORD` if you want token-only authentication, then securely delete the temporary token file.
 
@@ -173,7 +175,7 @@ Do not use the Garmin session token as the HTTP bearer token. Do not expose the 
 | `MCP_HTTP_PATH` | `/mcp` | Streamable HTTP endpoint path |
 | `MCP_BEARER_TOKEN` | — | Required in HTTP mode; independent secret of at least 32 bytes |
 
-The client de-duplicates concurrent requests, caches successful responses, reloads with username/password after a `401` or `403`, and applies bounded exponential backoff after a `429`. If token-only authentication expires, export a fresh token or temporarily configure username/password.
+The client de-duplicates concurrent requests, caches successful responses, refreshes an expiring session with its OAuth1 token, reconnects after a `401` or `403`, and applies bounded exponential backoff after a `429`. If Garmin revokes the long-lived token, run the export script again.
 
 ## Development
 
@@ -188,6 +190,8 @@ The server writes protocol messages only to stdout. Runtime diagnostics go to st
 ## Acknowledgements
 
 The client/cache/formatting design was informed by [Likenttt/garmin-connect-plugin-for-dsh](https://github.com/Likenttt/garmin-connect-plugin-for-dsh), an MIT-licensed Garmin integration. This repository is a standalone MCP implementation and does not retain its DeepSeek Harness or Cordis dependencies.
+
+The MFA-capable mobile SSO flow follows protocol behavior documented by the MIT-licensed [garth](https://github.com/matin/garth) and [garmin-connect](https://github.com/Pythe1337N/garmin-connect) projects.
 
 ## License
 

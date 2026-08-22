@@ -1,14 +1,15 @@
 import garminConnectPackage from 'garmin-connect'
 import type { Config, LogLevel } from '../config.js'
 import { MemoryCache } from '../utils/cache.js'
+import {
+  loginForSession,
+  parseSessionToken,
+  refreshSessionToken,
+  type GarminSessionToken,
+} from './auth.js'
 
 const { GarminConnect } = garminConnectPackage
 type GarminConnectClient = InstanceType<typeof GarminConnect>
-
-interface SessionToken {
-  oauth1: unknown
-  oauth2: unknown
-}
 
 const LOG_LEVELS: Record<LogLevel, number> = {
   debug: 10,
@@ -22,10 +23,12 @@ export class GarminClient {
   private readonly cache: MemoryCache
   private connected = false
   private connecting: Promise<void> | undefined
+  private sessionToken: GarminSessionToken | undefined
 
   constructor(private readonly config: Config) {
     this.client = this.createClient()
     this.cache = new MemoryCache(config.cacheTtlSeconds * 1_000, config.cacheMaxEntries)
+    this.sessionToken = config.sessionToken ? parseSessionToken(config.sessionToken) : undefined
   }
 
   async connect(forcePasswordLogin = false): Promise<void> {
@@ -68,7 +71,7 @@ export class GarminClient {
 
   async exportSession(): Promise<string> {
     await this.connect()
-    return JSON.stringify(this.client.exportToken())
+    return JSON.stringify(this.sessionToken ?? this.client.exportToken())
   }
 
   private async cached<T>(key: string, request: () => Promise<T>): Promise<T> {
@@ -79,25 +82,59 @@ export class GarminClient {
     this.connected = false
     this.client = this.createClient()
     try {
-      if (this.config.sessionToken && !forcePasswordLogin) {
-        const token = parseSessionToken(this.config.sessionToken)
-        this.client.loadToken(
-          token.oauth1 as Parameters<GarminConnectClient['loadToken']>[0],
-          token.oauth2 as Parameters<GarminConnectClient['loadToken']>[1],
-        )
-        this.log('info', 'Loaded Garmin session token.')
-      } else {
-        if (!this.config.username || !this.config.password) {
-          throw new Error('The Garmin session expired and username/password fallback is not configured.')
+      if (this.sessionToken) {
+        try {
+          const token = await refreshSessionToken(
+            this.sessionToken,
+            this.config.region,
+            forcePasswordLogin,
+          )
+          this.sessionToken = token
+          this.loadSessionToken(token)
+          this.log(
+            'info',
+            forcePasswordLogin ? 'Refreshed Garmin session token.' : 'Loaded Garmin session token.',
+          )
+        } catch (error) {
+          if (!forcePasswordLogin || !this.config.username || !this.config.password) throw error
+          this.log('warn', 'Session refresh failed; reconnecting with username/password.')
+          await this.loginWithPassword()
         }
-        this.log('info', 'Logging in to Garmin Connect with username/password.')
-        await this.client.login()
+      } else {
+        await this.loginWithPassword()
       }
       this.connected = true
     } catch (error) {
       this.connected = false
       throw error
     }
+  }
+
+  private async loginWithPassword(): Promise<void> {
+    if (!this.config.username || !this.config.password) {
+      throw new Error('The Garmin session expired and username/password fallback is not configured.')
+    }
+
+    this.log('info', 'Logging in to Garmin Connect with username/password.')
+    const token = await loginForSession(
+      this.config.username,
+      this.config.password,
+      this.config.region,
+      async (method) => {
+        throw new Error(
+          `Garmin requires MFA (${method}). Run scripts/export-session.ts interactively and configure GARMIN_SESSION_TOKEN.`,
+        )
+      },
+    )
+    this.sessionToken = token
+    this.loadSessionToken(token)
+  }
+
+  private loadSessionToken(token: GarminSessionToken): void {
+    this.client.loadToken(
+      token.oauth1 as unknown as Parameters<GarminConnectClient['loadToken']>[0],
+      token.oauth2 as unknown as Parameters<GarminConnectClient['loadToken']>[1],
+    )
   }
 
   private async withRetry<T>(request: () => Promise<T>): Promise<T> {
@@ -149,19 +186,6 @@ export class GarminClient {
     if (LOG_LEVELS[level] < LOG_LEVELS[this.config.logLevel]) return
     console.error(`[garmin-connect-mcp] ${level.toUpperCase()}: ${message}`)
   }
-}
-
-function parseSessionToken(value: string): SessionToken {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(value)
-  } catch {
-    throw new Error('GARMIN_SESSION_TOKEN must be valid JSON from scripts/export-session.ts.')
-  }
-  if (!parsed || typeof parsed !== 'object' || !('oauth1' in parsed) || !('oauth2' in parsed)) {
-    throw new Error('GARMIN_SESSION_TOKEN must contain oauth1 and oauth2 token objects.')
-  }
-  return parsed as SessionToken
 }
 
 function toLocalDate(value: string): Date {
