@@ -45,7 +45,6 @@ export interface GarminSessionToken {
 export type MfaPrompt = (method: string) => Promise<string>
 
 interface GarminEndpoints {
-  domain: string
   sso: string
   integration: string
   connectApi: string
@@ -238,12 +237,12 @@ async function exchangeOAuth1ForOAuth2(
     { url, method: 'POST', data: form },
     { key: oauth1.oauth_token, secret: oauth1.oauth_token_secret },
   )
-  const query = new URLSearchParams()
-  for (const [key, value] of Object.entries(authorization)) query.set(key, String(value))
+  const authorizationHeader = oauth.toHeader(authorization)
 
-  const response = await fetch(`${url}?${query}`, {
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
+      ...authorizationHeader,
       'Content-Type': 'application/x-www-form-urlencoded',
       'User-Agent': MOBILE_USER_AGENT,
     },
@@ -302,7 +301,6 @@ function oauthClient(consumer: OAuthConsumer): OAuth {
 function garminEndpoints(region: GarminRegion): GarminEndpoints {
   const domain = region === 'cn' ? 'garmin.cn' : 'garmin.com'
   return {
-    domain,
     sso: `https://sso.${domain}`,
     integration: `https://mobile.integration.${domain}/gcm/android`,
     connectApi: `https://connectapi.${domain}`,
