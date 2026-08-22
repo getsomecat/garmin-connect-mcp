@@ -16,6 +16,8 @@ const DI_CLIENT_IDS = [
   'GARMIN_CONNECT_MOBILE_ANDROID_DI',
   'GARMIN_CONNECT_MOBILE_IOS_DI',
 ] as const
+const DI_GRANT_TYPE =
+  'https://connectapi.garmin.com/di-oauth2-service/oauth/grant/service_ticket'
 const TOKEN_REFRESH_BUFFER_SECONDS = 15 * 60
 
 export interface OAuth1Token {
@@ -432,7 +434,7 @@ function garminEndpoints(region: GarminRegion): GarminEndpoints {
     iosIntegration: `https://mobile.integration.${domain}/gcm/ios`,
     connectApi: `https://connectapi.${domain}`,
     diAuth: `https://diauth.${domain}/di-oauth2-service/oauth/token`,
-    diGrantType: `https://connectapi.${domain}/di-oauth2-service/oauth/grant/service_ticket`,
+    diGrantType: DI_GRANT_TYPE,
   }
 }
 
