@@ -239,7 +239,12 @@ function formString(body: unknown, key: string): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function logOAuthFailure(_request: Request, response: Response, next: NextFunction): void {
+function logOAuthFailure(request: Request, response: Response, next: NextFunction): void {
+  response.once('finish', () => {
+    console.error(
+      `[garmin-connect-mcp] OAuth token request completed (${request.method} ${response.statusCode}).`,
+    )
+  })
   const sendJson = response.json.bind(response)
   response.json = ((body: unknown) => {
     if (response.statusCode >= 400) {
