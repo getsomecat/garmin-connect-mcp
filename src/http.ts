@@ -95,6 +95,8 @@ export async function startHttpServer(config: Config): Promise<HttpRuntime> {
       },
     )
 
+    app.use('/token', logOAuthFailure)
+
     app.use(mcpAuthRouter({
       provider: oauthProvider,
       issuerUrl: oauthConfig.issuerUrl,
@@ -237,6 +239,23 @@ function formString(body: unknown, key: string): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
+function logOAuthFailure(_request: Request, response: Response, next: NextFunction): void {
+  const sendJson = response.json.bind(response)
+  response.json = ((body: unknown) => {
+    if (response.statusCode >= 400) {
+      const error = isRecord(body) && typeof body.error === 'string'
+        ? body.error
+        : 'unknown_error'
+      const description = isRecord(body) && typeof body.error_description === 'string'
+        ? body.error_description
+        : 'No OAuth error description was returned.'
+      console.error(`[garmin-connect-mcp] OAuth token request failed (${response.statusCode} ${error}): ${description}`)
+    }
+    return sendJson(body)
+  }) as Response['json']
+  next()
+}
+
 function createSecurityHeaders(allowedRedirectUris: readonly string[]) {
   const formActionSources = [
     "'self'",
@@ -262,6 +281,10 @@ function sendRpcError(response: Response, status: number, code: number, message:
     error: { code, message },
     id: null,
   })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 function listen(server: NodeHttpServer, port: number, host: string): Promise<void> {
