@@ -13,7 +13,7 @@ const password = 'oauth-smoke-test-password'
 const workDirectory = await mkdtemp(join(tmpdir(), 'garmin-mcp-oauth-'))
 const port = await availablePort()
 const endpoint = new URL(`http://127.0.0.1:${port}/mcp`)
-const callback = `http://127.0.0.1:${port}/callback`
+const callback = 'https://chatgpt.com/connector/oauth/smoke-test'
 const config = loadConfig({
   GARMIN_USERNAME: 'smoke-test',
   GARMIN_PASSWORD: 'smoke-test',
@@ -62,6 +62,12 @@ try {
   }).toString()
   const authorization = await fetch(authorize)
   assert(authorization.ok, `Authorization page returned ${authorization.status}.`)
+  assert(
+    authorization.headers.get('content-security-policy')?.includes(
+      "form-action 'self' https://chatgpt.com",
+    ),
+    'Authorization page CSP does not allow the configured callback origin.',
+  )
   const authorizationHtml = await authorization.text()
   const requestId = /name="request_id" value="([^"]+)"/.exec(authorizationHtml)?.[1]
   assert(Boolean(requestId), 'Authorization page did not contain a request identifier.')

@@ -43,7 +43,7 @@ export async function startHttpServer(config: Config): Promise<HttpRuntime> {
   const app = express()
   app.disable('x-powered-by')
   app.set('trust proxy', 'loopback')
-  app.use(setSecurityHeaders)
+  app.use(createSecurityHeaders(config.oauth?.allowedRedirectUris ?? []))
 
   app.get('/healthz', (_request, response) => {
     response.status(200).json({ status: 'ok' })
@@ -237,16 +237,23 @@ function formString(body: unknown, key: string): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function setSecurityHeaders(_request: Request, response: Response, next: NextFunction): void {
-  response.setHeader('Cache-Control', 'no-store')
-  response.setHeader('X-Content-Type-Options', 'nosniff')
-  response.setHeader('Referrer-Policy', 'no-referrer')
-  response.setHeader('X-Frame-Options', 'DENY')
-  response.setHeader(
-    'Content-Security-Policy',
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-  )
-  next()
+function createSecurityHeaders(allowedRedirectUris: readonly string[]) {
+  const formActionSources = [
+    "'self'",
+    ...new Set(allowedRedirectUris.map((uri) => new URL(uri).origin)),
+  ].join(' ')
+
+  return (_request: Request, response: Response, next: NextFunction): void => {
+    response.setHeader('Cache-Control', 'no-store')
+    response.setHeader('X-Content-Type-Options', 'nosniff')
+    response.setHeader('Referrer-Policy', 'no-referrer')
+    response.setHeader('X-Frame-Options', 'DENY')
+    response.setHeader(
+      'Content-Security-Policy',
+      `default-src 'none'; style-src 'unsafe-inline'; form-action ${formActionSources}; base-uri 'none'; frame-ancestors 'none'`,
+    )
+    next()
+  }
 }
 
 function sendRpcError(response: Response, status: number, code: number, message: string): void {
