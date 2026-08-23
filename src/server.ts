@@ -3,7 +3,9 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   type CallToolResult,
+  type Tool,
 } from '@modelcontextprotocol/sdk/types.js'
+import { GARMIN_READ_SCOPE } from './auth/provider.js'
 import type { Config } from './config.js'
 import { GarminClient } from './garmin/client.js'
 import { createTools } from './tools/index.js'
@@ -23,7 +25,7 @@ export function createServer(config: Config, client: GarminClient = new GarminCl
   )
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((tool) => tool.definition),
+    tools: tools.map((tool) => toolDefinition(tool.definition, Boolean(config.oauth))),
   }))
 
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
@@ -42,6 +44,19 @@ export function createServer(config: Config, client: GarminClient = new GarminCl
   })
 
   return server
+}
+
+function toolDefinition(definition: Tool, oauthEnabled: boolean): Tool {
+  if (!oauthEnabled) return definition
+  const securitySchemes = [{ type: 'oauth2', scopes: [GARMIN_READ_SCOPE] }]
+  return {
+    ...definition,
+    securitySchemes,
+    _meta: {
+      ...(definition._meta ?? {}),
+      securitySchemes,
+    },
+  } as Tool
 }
 
 function asArguments(value: unknown): Record<string, unknown> {

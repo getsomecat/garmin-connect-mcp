@@ -1,6 +1,6 @@
 # Garmin Connect MCP Server
 
-A read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for Garmin Connect. It exposes recent activities, sleep, steps, heart rate, weight, workouts, and profile data to Codex and other MCP clients. It supports local stdio and private Streamable HTTP deployments.
+A read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for Garmin Connect. It exposes recent activities, sleep, steps, heart rate, weight, workouts, and profile data to Codex and other MCP clients. It supports local stdio and private Streamable HTTP deployments with static bearer or single-user OAuth 2.1 authentication.
 
 This first version is written in TypeScript with the MCP SDK, `garmin-connect`, and `dotenv`. It has no DeepSeek Harness or Cordis dependency.
 
@@ -108,7 +108,7 @@ Use the same stdio command:
 
 ## Private Streamable HTTP deployment
 
-The HTTP transport is intended to run behind an HTTPS reverse proxy. It is stateless, uses JSON responses, and requires a bearer token of at least 32 bytes.
+The HTTP transport is intended to run behind an HTTPS reverse proxy. It is stateless at the MCP layer and uses JSON responses. Configure a static bearer token, the single-user OAuth block, or both. Keeping both lets an existing Codex client continue using its bearer token while ChatGPT uses OAuth.
 
 Generate an independent MCP bearer token (this is not the Garmin session token):
 
@@ -154,6 +154,42 @@ export GARMIN_MCP_BEARER_TOKEN='the-generated-bearer-token'
 
 Do not use the Garmin session token as the HTTP bearer token. Do not expose the Node.js port publicly, put secrets in Nginx configuration, or deploy the HTTP transport without HTTPS.
 
+## Private ChatGPT plugin with OAuth
+
+ChatGPT connections that access personal Garmin data should use OAuth. This server implements a deliberately narrow single-user OAuth 2.1 authorization server with PKCE (`S256`), dynamic registration restricted to ChatGPT's official callback, short-lived access tokens, rotating refresh tokens, hashed credentials, rate-limited approval, and an atomic private state file.
+
+First create a separate access password. This is neither your Garmin password nor the static MCP bearer token:
+
+```bash
+npm run hash-oauth-password
+```
+
+The command hides the password while you type and prints only its scrypt hash. Put the hash and the public endpoint in the server environment:
+
+```dotenv
+MCP_PUBLIC_URL=https://garmin.example.com/mcp
+MCP_OAUTH_PASSWORD_HASH=scrypt$...
+MCP_OAUTH_STATE_FILE=/var/lib/garmin-connect-mcp/oauth-state.json
+MCP_OAUTH_ALLOWED_REDIRECT_URIS=https://chatgpt.com/connector_platform_oauth_redirect
+```
+
+Use the supplied systemd unit so `/var/lib/garmin-connect-mcp` is created with mode `0700`, and use the supplied Nginx location so `/mcp`, OAuth discovery, registration, authorization, token, approval, and revocation routes all reach Node.js. Rebuild and restart the service, then verify:
+
+```bash
+curl -fsS https://garmin.example.com/.well-known/oauth-protected-resource/mcp
+curl -fsS https://garmin.example.com/.well-known/oauth-authorization-server
+```
+
+To add it to ChatGPT as a personal plugin:
+
+1. In ChatGPT settings, open **Security and login** and enable **Developer mode**.
+2. Open **Plugins**, select the add (`+`) action, and enter `https://garmin.example.com/mcp`.
+3. Review the seven read-only tools and start the OAuth connection.
+4. On the private authorization page hosted by your server, enter the separate access password and approve.
+5. Test with a low-risk request such as “读取我的 Garmin 个人资料”。
+
+See OpenAI's official [plugin quickstart](https://developers.openai.com/plugins/quickstart), [MCP connection guide](https://developers.openai.com/plugins/deploy/connect-chatgpt), and [authentication requirements](https://developers.openai.com/plugins/build/auth). This built-in provider is intended for one owner's private deployment. Replace it with an established identity provider before serving multiple users or publishing a plugin.
+
 ## Configuration
 
 | Variable | Default | Description |
@@ -173,7 +209,14 @@ Do not use the Garmin session token as the HTTP bearer token. Do not expose the 
 | `MCP_HTTP_HOST` | `127.0.0.1` | HTTP bind address; keep loopback when using a reverse proxy |
 | `MCP_HTTP_PORT` | `3100` | Internal HTTP listen port |
 | `MCP_HTTP_PATH` | `/mcp` | Streamable HTTP endpoint path |
-| `MCP_BEARER_TOKEN` | — | Required in HTTP mode; independent secret of at least 32 bytes |
+| `MCP_BEARER_TOKEN` | — | Optional independent static-client secret (minimum 32 bytes) |
+| `MCP_PUBLIC_URL` | — | Canonical public HTTPS MCP URL, including `/mcp`; enables OAuth |
+| `MCP_OAUTH_ISSUER` | URL origin | OAuth issuer on the same origin as `MCP_PUBLIC_URL` |
+| `MCP_OAUTH_PASSWORD_HASH` | — | Scrypt hash produced by `npm run hash-oauth-password` |
+| `MCP_OAUTH_STATE_FILE` | — | Private persistent file for registered clients and hashed tokens |
+| `MCP_OAUTH_ALLOWED_REDIRECT_URIS` | ChatGPT callback | Comma-separated exact OAuth redirect URI allowlist |
+| `MCP_OAUTH_ACCESS_TOKEN_TTL` | `3600` | OAuth access-token lifetime in seconds |
+| `MCP_OAUTH_REFRESH_TOKEN_TTL` | `7776000` | OAuth refresh-token lifetime in seconds (90 days) |
 
 The client de-duplicates concurrent requests, caches successful responses, refreshes current DI sessions with their refresh token, remains compatible with legacy OAuth1/OAuth2 sessions, reconnects after a `401` or `403`, and applies bounded exponential backoff after a `429`. If Garmin revokes the long-lived token, run the export script again.
 
@@ -182,6 +225,7 @@ The client de-duplicates concurrent requests, caches successful responses, refre
 ```bash
 npm run build
 npm run smoke:http
+npm run smoke:oauth
 npm run dev
 ```
 
