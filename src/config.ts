@@ -39,6 +39,7 @@ export interface Config {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const sessionToken = optional(env.GARMIN_SESSION_TOKEN)
+    ?? base64Secret(env.GARMIN_SESSION_TOKEN_B64, 'GARMIN_SESSION_TOKEN_B64')
   const username = optional(env.GARMIN_USERNAME)
   const password = optional(env.GARMIN_PASSWORD)
   const transport = oneOf(env.MCP_TRANSPORT, ['stdio', 'http'], 'stdio', 'MCP_TRANSPORT')
@@ -162,6 +163,18 @@ function oauthConfig(env: NodeJS.ProcessEnv): OAuthConfig | undefined {
 function optional(value: string | undefined): string | undefined {
   const trimmed = value?.trim()
   return trimmed ? trimmed : undefined
+}
+
+function base64Secret(value: string | undefined, name: string): string | undefined {
+  const encoded = optional(value)
+  if (!encoded) return undefined
+  try {
+    const decoded = Buffer.from(encoded, 'base64').toString('utf8').trim()
+    if (!decoded) throw new Error('empty value')
+    return decoded
+  } catch {
+    throw new Error(`${name} must contain a valid non-empty base64 value.`)
+  }
 }
 
 function csv(value: string | undefined): string[] {

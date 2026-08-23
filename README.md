@@ -195,6 +195,7 @@ See OpenAI's official [plugin quickstart](https://developers.openai.com/plugins/
 | Variable | Default | Description |
 |---|---:|---|
 | `GARMIN_SESSION_TOKEN` | — | JSON token created by `scripts/export-session.ts` |
+| `GARMIN_SESSION_TOKEN_B64` | — | Base64-encoded session token; convenient for systemd environment files |
 | `GARMIN_USERNAME` | — | Garmin Connect email/username |
 | `GARMIN_PASSWORD` | — | Garmin Connect password |
 | `GARMIN_REGION` | `global` | `global` (`garmin.com`) or `cn` (`garmin.cn`) |
