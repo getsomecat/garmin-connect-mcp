@@ -25,6 +25,7 @@
     "export-session": "tsx scripts/export-session.ts",
     "hash-oauth-password": "tsx scripts/hash-oauth-password.ts",
     "smoke:http": "tsx scripts/smoke-http.ts",
+    "smoke:auth0": "tsx scripts/smoke-auth0.ts",
     "smoke:oauth": "tsx scripts/smoke-oauth.ts",
     "prepack": "npm run build"
   },
@@ -42,9 +43,10 @@
     "url": "https://github.com/getsomecat/garmin-connect-mcp.git"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "dependencies": {
+    "@auth0/auth0-api-js": "^1.6.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",

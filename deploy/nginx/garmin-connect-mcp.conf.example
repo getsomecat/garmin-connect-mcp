@@ -1,5 +1,6 @@
 # Add this location to the HTTPS server block for your existing site. It exposes
-# the MCP endpoint plus the OAuth 2.1 discovery/authorization endpoints.
+# the MCP endpoint and OAuth discovery. The built-in fallback also uses the local
+# authorization routes; in Auth0 mode those routes return 404.
 location ~ ^/(mcp|authorize|token|register|revoke|oauth/approve|\.well-known/oauth-(protected-resource(/mcp)?|authorization-server))$ {
     proxy_pass http://127.0.0.1:3100;
     proxy_http_version 1.1;

@@ -13,12 +13,14 @@ import {
   getOAuthProtectedResourceMetadataUrl,
   mcpAuthRouter,
 } from '@modelcontextprotocol/sdk/server/auth/router.js'
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import { Auth0AccessTokenVerifier } from './auth/auth0.js'
 import {
   GARMIN_READ_SCOPE,
   SingleUserOAuthProvider,
 } from './auth/provider.js'
-import type { Config } from './config.js'
+import type { Auth0Config, Config, OAuthConfig } from './config.js'
 import { GarminClient } from './garmin/client.js'
 import { createServer as createMcpServer } from './server.js'
 
@@ -31,14 +33,26 @@ export interface HttpRuntime {
   close(): Promise<void>
 }
 
+interface AccessTokenVerifier {
+  verifyAccessToken(token: string): Promise<AuthInfo>
+}
+
 export async function startHttpServer(config: Config): Promise<HttpRuntime> {
-  if (!config.bearerToken && !config.oauth) {
-    throw new Error('The HTTP transport requires bearer-token or OAuth authentication.')
+  if (!config.bearerToken && !config.oauth && !config.auth0) {
+    throw new Error('The HTTP transport requires bearer-token, built-in OAuth, or Auth0 authentication.')
   }
 
   const garminClient = new GarminClient(config)
   const oauthProvider = config.oauth
     ? await SingleUserOAuthProvider.create(config.oauth)
+    : undefined
+  const auth0Verifier = config.auth0
+    ? new Auth0AccessTokenVerifier(config.auth0)
+    : undefined
+  const accessTokenVerifier: AccessTokenVerifier | undefined = oauthProvider ?? auth0Verifier
+  const authorizationConfig = config.oauth ?? config.auth0
+  const resourceMetadataUrl = authorizationConfig
+    ? getOAuthProtectedResourceMetadataUrl(authorizationConfig.publicUrl)
     : undefined
   const app = express()
   app.disable('x-powered-by')
@@ -49,20 +63,21 @@ export async function startHttpServer(config: Config): Promise<HttpRuntime> {
     response.status(200).json({ status: 'ok' })
   })
 
-  if (oauthProvider && config.oauth) {
-    const oauthConfig = config.oauth
-    const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(oauthConfig.publicUrl)
+  if (authorizationConfig) {
+    const metadata = protectedResourceMetadata(authorizationConfig, config.auth0)
+    const pathSpecificMetadataPath = new URL(resourceMetadataUrl ?? '').pathname
 
+    app.get(pathSpecificMetadataPath, (_request, response) => {
+      response.status(200).json(metadata)
+    })
     // Compatibility alias for clients that have not yet adopted path-specific RFC 9728 discovery.
     app.get('/.well-known/oauth-protected-resource', (_request, response) => {
-      response.status(200).json({
-        resource: oauthConfig.publicUrl.href,
-        authorization_servers: [oauthConfig.issuerUrl.href],
-        scopes_supported: [GARMIN_READ_SCOPE],
-        bearer_methods_supported: ['header'],
-        resource_name: 'Private Garmin Connect data',
-      })
+      response.status(200).json(metadata)
     })
+  }
+
+  if (oauthProvider && config.oauth) {
+    const oauthConfig = config.oauth
 
     app.post(
       '/oauth/approve',
@@ -106,22 +121,18 @@ export async function startHttpServer(config: Config): Promise<HttpRuntime> {
       scopesSupported: [GARMIN_READ_SCOPE],
       resourceName: 'Private Garmin Connect data',
     }))
-
-    app.all(config.httpPath, (request, response) => {
-      void handleMcpRequest(
-        config,
-        garminClient,
-        oauthProvider,
-        resourceMetadataUrl,
-        request,
-        response,
-      )
-    })
-  } else {
-    app.all(config.httpPath, (request, response) => {
-      void handleMcpRequest(config, garminClient, undefined, undefined, request, response)
-    })
   }
+
+  app.all(config.httpPath, (request, response) => {
+    void handleMcpRequest(
+      config,
+      garminClient,
+      accessTokenVerifier,
+      resourceMetadataUrl,
+      request,
+      response,
+    )
+  })
 
   app.use((_request, response) => {
     response.status(404).json({ error: 'Not found.' })
@@ -151,12 +162,12 @@ export async function startHttpServer(config: Config): Promise<HttpRuntime> {
 async function handleMcpRequest(
   config: Config,
   garminClient: GarminClient,
-  oauthProvider: SingleUserOAuthProvider | undefined,
+  accessTokenVerifier: AccessTokenVerifier | undefined,
   resourceMetadataUrl: string | undefined,
   request: Request,
   response: Response,
 ): Promise<void> {
-  if (!(await isAuthorized(request, config, oauthProvider))) {
+  if (!(await isAuthorized(request, config, accessTokenVerifier))) {
     response.setHeader('WWW-Authenticate', resourceMetadataUrl
       ? `Bearer resource_metadata="${resourceMetadataUrl}", scope="${GARMIN_READ_SCOPE}"`
       : 'Bearer realm="garmin-connect-mcp"')
@@ -205,19 +216,40 @@ async function handleMcpRequest(
 async function isAuthorized(
   request: Request,
   config: Config,
-  oauthProvider: SingleUserOAuthProvider | undefined,
+  accessTokenVerifier: AccessTokenVerifier | undefined,
 ): Promise<boolean> {
   const token = bearerToken(request)
   if (!token) return false
   if (config.bearerToken && tokenEquals(token, config.bearerToken)) return true
-  if (!oauthProvider) return false
+  if (!accessTokenVerifier) return false
 
   try {
-    const auth = await oauthProvider.verifyAccessToken(token)
+    const auth = await accessTokenVerifier.verifyAccessToken(token)
+    const publicUrl = config.oauth?.publicUrl ?? config.auth0?.publicUrl
     return auth.scopes.includes(GARMIN_READ_SCOPE)
-      && (!config.oauth || auth.resource?.href === config.oauth.publicUrl.href)
+      && (!publicUrl || auth.resource?.href === publicUrl.href)
   } catch {
     return false
+  }
+}
+
+function protectedResourceMetadata(
+  authorizationConfig: OAuthConfig | Auth0Config,
+  auth0: Auth0Config | undefined,
+): Record<string, unknown> {
+  return {
+    resource: authorizationConfig.publicUrl.href,
+    authorization_servers: [authorizationConfig.issuerUrl.href],
+    scopes_supported: [GARMIN_READ_SCOPE],
+    bearer_methods_supported: ['header'],
+    resource_name: 'Private Garmin Connect data',
+    resource_documentation: 'https://github.com/getsomecat/garmin-connect-mcp',
+    ...(auth0
+      ? {
+          jwks_uri: new URL('/.well-known/jwks.json', auth0.issuerUrl).href,
+          resource_signing_alg_values_supported: ['RS256'],
+        }
+      : {}),
   }
 }
 

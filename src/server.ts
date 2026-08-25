@@ -25,7 +25,7 @@ export function createServer(config: Config, client: GarminClient = new GarminCl
   )
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((tool) => toolDefinition(tool.definition, Boolean(config.oauth))),
+    tools: tools.map((tool) => toolDefinition(tool.definition, Boolean(config.oauth || config.auth0))),
   }))
 
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
