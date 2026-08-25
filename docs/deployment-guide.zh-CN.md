@@ -2,7 +2,7 @@
 
 这是一份面向个人用户的完整部署教程。它只假设你已经拥有一台可通过 SSH 管理的 VPS 和一个可以修改 DNS 的域名；从域名解析、Nginx/HTTPS、Node.js、Garmin 登录、Auth0 OAuth，一直到 ChatGPT 和 Codex 连接都会覆盖。
 
-本文来自一套实际完成并验证的部署：Ubuntu 24.04、1 核 CPU、约 2 GB 内存、同机已有 Nginx/Hexo、Garmin 中国区账号、Auth0 OAuth，以及可选的 Codex 静态 Bearer 访问。没有网站的空白 VPS 也可以照做；已有博客只是本教程特别处理的一种兼容场景。文中的域名、账号、用户 ID 和令牌均为占位符。
+本文来自一套实际完成并验证的部署：Ubuntu 24.04、1 核 CPU、约 2 GB 内存、同机已有 Nginx/Hexo、Garmin 中国区账号、Auth0 OAuth、ChatGPT 个人插件和 Codex 远程 MCP。最终由客户端发现并成功调用全部十二个只读工具。没有网站的空白 VPS 也可以照做；已有博客只是本教程特别处理的一种兼容场景。文中的域名、账号、用户 ID、回调 ID 和令牌均为占位符。
 
 > 适用范围：一个 Garmin 账号、一个所有者、只读查询。它不是面向公众注册的多租户 SaaS。Garmin 使用的是非官方 Web API，未来可能因 Garmin 接口变更而需要更新项目。
 
@@ -14,8 +14,8 @@
 - 如果同机已有 Hexo 或其他网站，原站点继续正常使用 80/443；
 - Garmin MCP 仅监听 VPS 本机的 `127.0.0.1:3100`；
 - Nginx 使用独立子域名或现有 HTTPS 站点转发 `/mcp` 和 OAuth 发现路径；
-- ChatGPT 通过 Auth0 登录，只获得 `garmin:read` 权限；
-- Codex 可以继续使用独立的静态 Bearer 令牌；
+- ChatGPT 和 Codex 都可以通过 Auth0 OAuth 登录并获得 `garmin:read`；
+- Codex 也可以选择独立的静态 Bearer 作为兼容回退；
 - 你的电脑关机后，VPS 上的服务仍可使用；
 - 在任何新对话中重新选择 Garmin Connect 即可，不必永远留在同一个对话。
 
@@ -45,9 +45,11 @@
 ```mermaid
 flowchart LR
     W[Garmin 设备] --> G[Garmin Connect]
-    C[ChatGPT] <-->|OAuth 登录与授权| A[Auth0]
+    C[ChatGPT 插件] <-->|OAuth 登录与授权| A[Auth0]
+    X[Codex] <-->|OAuth 登录与授权| A
     C -->|HTTPS /mcp + Auth0 access token| N[Nginx]
-    X[Codex，可选] -->|HTTPS /mcp + static Bearer| N
+    X -->|HTTPS /mcp + Auth0 access token| N
+    X -.->|可选 static Bearer| N
     B[原网站，可选] <-->|原有站点路由| N
     N -->|127.0.0.1:3100| M[Garmin MCP Server]
     M -->|Garmin session token| G
@@ -58,7 +60,7 @@ flowchart LR
 | 凭据 | 存放位置 | 用途 |
 |---|---|---|
 | Garmin session token | VPS 的受限环境文件 | MCP 代表你读取 Garmin 数据 |
-| MCP static Bearer | VPS 和 Codex 所在电脑 | 可选的 Codex 客户端认证 |
+| MCP static Bearer | VPS 和使用它的客户端 | 可选的兼容回退，不是 OAuth 的必需项 |
 | Auth0 用户和 access token | Auth0/ChatGPT OAuth 流程 | 确认是哪位用户正在访问 MCP |
 
 不要把 Garmin session token 当成 MCP Bearer，也不要把 Garmin 密码输入 Auth0 登录页。任何一种令牌都不要提交到 Git、粘贴进聊天或写进 Nginx 配置。
@@ -259,7 +261,7 @@ base64 < garmin-session.json | tr -d '\r\n' > garmin-session.b64
 
 ## 4. 配置 Auth0
 
-Auth0 在这里是授权服务器。ChatGPT 先在 Auth0 登录并取得有限权限的 access token，MCP 再验证这个 token 的签名、签发方、资源、有效期、scope 和用户 ID。
+Auth0 在这里是授权服务器。ChatGPT 或 Codex 先在 Auth0 登录并取得有限权限的 access token，MCP 再验证这个 token 的签名、签发方、资源、有效期、scope 和用户 ID。
 
 ### 4.1 启用 tenant 设置
 
@@ -269,7 +271,7 @@ Auth0 在这里是授权服务器。ChatGPT 先在 Auth0 登录并取得有限�
 - **Include Issuer in Authorization Responses**；
 - **Client ID Metadata Document Registration**。
 
-其中前两项是 Auth0 官方 MCP 指南要求的发现与资源绑定设置，第三项用于导入 ChatGPT 发布的 CIMD 客户端元数据。控制台文案可能随版本稍有变化。
+其中前两项是 Auth0 官方 MCP 指南要求的发现与资源绑定设置，第三项用于导入 OpenAI 客户端发布的 CIMD 元数据。控制台文案可能随版本稍有变化。
 
 ### 4.2 创建 API
 
@@ -299,43 +301,68 @@ Identifier 必须与后面的 `MCP_PUBLIC_URL` 和 `MCP_AUTH0_AUDIENCE` 逐字�
 
 稍后把这个 User ID 放入 `MCP_AUTH0_ALLOWED_SUBJECTS`。如果不设置用户白名单，tenant 中其他能登录的用户也可能访问同一个 Garmin 账号的数据。
 
-### 4.4 导入 ChatGPT 的 CIMD
+### 4.4 区分 ChatGPT 与 Codex 的 CIMD 客户端
 
-进入 **Applications → Applications → Create Application → Import from URL**，输入：
+同一个 MCP URL 在 ChatGPT 个人插件和 Codex 直连中会出现为不同的 OAuth 客户端。不要只创建其中一个后假设另一个也能登录。
+
+#### 4.4.1 ChatGPT 个人插件
+
+当 Auth0 已启用 issuer identification 时，进入 **Applications → Applications → Create Application → Import from URL**，输入：
 
 ```text
 https://chatgpt.com/oauth/client.json
 ```
 
-先 Preview，确认名称为 ChatGPT、回调地址为：
+先 Preview，确认名称、客户端认证方式以及回调地址；符合稳定回调条件时会使用：
 
 ```text
 https://chatgpt.com/connector_platform_oauth_redirect
 ```
 
-再创建应用。ChatGPT 的 CIMD 使用非共享密钥的客户端认证，因此不需要、也不应把 Auth0 client secret 放到 VPS。
+再创建应用。若实际插件管理页展示的是带 callback ID 的 CIMD 或回调 URL，以管理页展示的精确值为准，不要自行拼接。
 
-> Auth0 官方文档说明，机密 CIMD 客户端使用 `private_key_jwt`，其可用性可能受 Auth0 套餐限制。如果导入时明确提示套餐不支持，这不是本机代理或 Garmin 代码造成的；请选择支持该能力的 Auth0 套餐，或使用项目保留的内置单用户 OAuth 回退方案。
+#### 4.4.2 Codex 远程 MCP
 
-### 4.5 只授予用户委托权限
+Codex 直连使用按 MCP 地址派生的客户端，格式类似：
+
+```text
+https://chatgpt.com/oauth/codex/<callback_id>/client.json
+```
+
+对应的本机回调类似：
+
+```text
+http://127.0.0.1:<临时端口>/callback/<callback_id>
+```
+
+`<callback_id>` 由 Codex 根据 MCP URL 派生，不应照抄别人的值。最稳妥的做法是在第 9 节先发起一次 Codex 登录，再从终端输出、浏览器授权 URL 或 Auth0 `Unknown client` 详情中复制完整 CIMD URL，然后在 Auth0 选择 **Import from URL → Preview → Create**。导入后通常显示为 Native、Third-party、CIMD 应用，不需要给 VPS 保存 Auth0 client secret。
+
+> ChatGPT 稳定 CIMD、ChatGPT callback-specific CIMD 和 Codex CIMD 是不同客户端标识。删除并重建连接时，应重新核对该连接实际发送的 `client_id`，不要凭旧截图猜测。
+
+### 4.5 为每个客户端授予用户委托权限
 
 回到刚创建的 Garmin API：
 
 1. 在 **Settings → Application Access Policy** 中，把 User-Delegated Access 设置为 **Per-app authorization**；
 2. Client Access 保持禁止或不授权；
-3. 在 **Application Access** 中找到刚导入的 ChatGPT CIMD；
-4. 仅对 **User-Delegated Access** 授予 `garmin:read`；
-5. 不要授予 Client Credentials/Machine-to-Machine 权限。
+3. 在 **Application Access** 中找到要使用的 ChatGPT 和/或 Codex CIMD 应用；
+4. 对每个应用打开 **User-Delegated Access → Grant Access**；
+5. 选择 `garmin:read` 并保存；
+6. 对普通交互式登录不要授予 Client Credentials/Machine-to-Machine 权限。
 
-这保证 ChatGPT 只能在你登录并授权后，以你的身份申请 `garmin:read`。
+Auth0 把 User-Delegated Access 与 Client Access 分开管理。ChatGPT 和 Codex 的交互式 OAuth 都属于用户委托流程，只需要前者。若未来给 API 增加更多 scope，逐项授权比“自动授予未来全部权限”更符合最小权限原则。
+
+这保证客户端只能在你登录并授权后，以你的身份申请 `garmin:read`。`MCP_AUTH0_ALLOWED_SUBJECTS` 还会在 MCP 端再次限制允许访问 Garmin 数据的 Auth0 用户。
 
 ## 5. 创建 VPS 服务环境文件
 
-先在本地或密码管理器中生成一个与 Garmin session 完全无关的静态 Bearer，供 Codex 可选使用：
+如果计划保留非 OAuth 客户端，再在本地或密码管理器中生成一个与 Garmin session 完全无关的静态 Bearer：
 
 ```bash
 openssl rand -hex 32
 ```
+
+ChatGPT 和 Codex 都使用 Auth0 OAuth 时可以跳过这一步，并在环境文件中省略 `MCP_BEARER_TOKEN`。
 
 在 VPS 上创建受限文件：
 
@@ -365,7 +392,7 @@ MCP_HTTP_HOST=127.0.0.1
 MCP_HTTP_PORT=3100
 MCP_HTTP_PATH=/mcp
 
-# 可选：给 Codex 使用，至少 32 字节，不是 Garmin session。
+# 可选兼容回退：至少 32 字节，不是 Garmin session。
 MCP_BEARER_TOKEN=PASTE_THE_INDEPENDENT_STATIC_BEARER_HERE
 
 MCP_PUBLIC_URL=https://your-domain.example/mcp
@@ -476,17 +503,17 @@ curl -i https://your-domain.example/mcp
 
 ## 8. 在 ChatGPT 中连接
 
-OpenAI 官方流程要求先有公网 HTTPS Streamable HTTP MCP endpoint，再在 ChatGPT 开启开发者模式并创建连接：
+OpenAI 官方流程要求先有公网 HTTPS Streamable HTTP MCP endpoint，再在 ChatGPT 开启开发者模式并创建连接。界面名称可能显示为 Plugins、Apps 或 Connectors，但核心字段相同：
 
 1. 打开 **Settings → Security and login**，启用 **Developer mode**；
-2. 打开 **Plugins**（某些界面称 Apps/Connectors），点击添加；
-3. 名称填写 `Garmin Connect`；
-4. MCP URL 填写 `https://your-domain.example/mcp`；
-5. 选择 OAuth，并检查发现结果；
-6. 确认授权服务器是 `https://your-tenant.us.auth0.com/`；
-7. 确认 scope 包含且只需要 `garmin:read`；
-8. 创建连接，使用刚创建的 Auth0 用户登录并授权；
-9. 刷新工具列表，确认出现十二个 Garmin 工具。
+2. 打开 **Plugins**，使用页面上的添加按钮创建个人插件；若主页面没有直接显示 `+`，从右上角 **Add/添加 → Create plugin/创建插件** 进入；
+3. 名称填写 `Garmin Connect`，描述明确它只读访问私人 Garmin 数据；
+4. Connection 选择公网 MCP，URL 填写 `https://your-domain.example/mcp`；
+5. 创建连接，让客户端自动执行 MCP 和 OAuth discovery；某些版本不会提供单独的“选择 OAuth”步骤，这是正常的；
+6. 在发现/授权页面确认授权服务器是 `https://your-tenant.us.auth0.com/`；
+7. 确认资源是完整 MCP URL，业务权限包含 `garmin:read`；Auth0 还可能显示标准 OIDC 身份 scope；
+8. 使用第 4.3 节创建的 Auth0 用户登录并授权；
+9. 回到插件详情，确认扫描结果为 **12 read**，再安装或启用插件。
 
 第一次测试建议使用不展示个人资料内容的请求：
 
@@ -519,11 +546,80 @@ https://your-domain.example/authorize
 3. 确认新连接发现 Auth0 并成功调用工具；
 4. 再删除旧连接，把新连接改成原来的名称。
 
-修改认证或工具元数据后，先在连接设置中执行 **Refresh**，再开启一个新对话测试。反复在旧连接上重试通常不会清除已缓存的 OAuth 元数据。
+修改认证或工具元数据后，先在连接设置中执行 **Refresh**，再开启一个新对话测试。若服务器已经是十二个工具，而插件详情仍固定显示七个，删除旧的个人插件后用同一 URL 创建一个全新插件，让平台生成新的 App ID 并重新扫描；随后在 Auth0 核对新连接实际使用的 CIMD 客户端。反复在旧连接上重试通常不会清除已保存的工具和 OAuth 元数据快照。
 
-## 9. 可选：让 Codex 远程使用同一 VPS
+## 9. 让 Codex 通过 OAuth 使用同一 VPS
 
-Codex 可以使用独立静态 Bearer，不必参与 ChatGPT/Auth0 登录。把以下配置加入可信项目的 `.codex/config.toml`，或个人的 `~/.codex/config.toml`：
+推荐让 Codex 也使用 Auth0 OAuth，这样本机不必保存独立静态 Bearer。ChatGPT 桌面应用、Codex CLI 和 IDE 扩展会共享同一个 Codex host 的 MCP 配置；ChatGPT 网页版不会读取本机的 `~/.codex/config.toml`，它使用第 8 节创建的托管插件。
+
+### 9.1 添加 Streamable HTTP MCP
+
+桌面界面操作：
+
+1. 打开 **Settings → Plugins → MCP**；
+2. 选择 **Add → Connect to custom MCP**；
+3. 名称填写 `garmin_connect`；
+4. 类型选择 **Streamable HTTP**；
+5. URL 填写 `https://your-domain.example/mcp`；
+6. 不填写启动命令、参数或环境变量；
+7. 保存并按界面提示 Restart，然后选择 Authenticate。
+
+也可以在本机的普通终端执行：
+
+```bash
+codex mcp add garmin_connect --url https://your-domain.example/mcp
+codex mcp list
+codex mcp login garmin_connect --oauth-client-registration cimd --scopes garmin:read
+```
+
+如果已经通过界面添加过 `garmin_connect`，不要重复运行 `codex mcp add`，直接运行后两条。`--scopes garmin:read` 明确请求本项目唯一的业务 scope；Auth0 可能同时请求它公开的标准 OIDC 身份 scope。
+
+### 9.2 首次登录时注册 Codex CIMD
+
+第一次 Authenticate/Login 可能在 Auth0 显示：
+
+```text
+invalid_request: Unknown client: https://chatgpt.com/oauth/codex/<callback_id>/client.json
+```
+
+这不表示 Garmin 密码错误，也通常与本机代理无关。它表示 Auth0 尚未登记这个 Codex 客户端。按以下顺序处理：
+
+1. 在 Auth0 错误页展开 **See details for this error**，或查看终端打印的 authorize URL；
+2. 复制完整的 `client_id`，它必须是 `https://chatgpt.com/oauth/codex/<callback_id>/client.json`，不要只复制 `<callback_id>`；
+3. 先直接打开该 JSON URL，确认 `client_name` 为 Codex、`application_type` 为 `native`，回调路径含相同的 `<callback_id>`；
+4. 在 Auth0 进入 **Applications → Applications → Create Application → Import from URL**；
+5. 粘贴完整 CIMD URL，依次选择 **Preview → Create Application**；
+6. 在新应用的 **Connections** 中确认第 4.3 节的 Database/Domain-Level Connection 已启用；
+7. 在 **API Access → Garmin Connect MCP → User-Delegated Access** 中 Grant Access，选择 `garmin:read` 并保存；
+8. 回到本机重新运行登录命令并在 Auth0 授权页接受授权：
+
+```bash
+codex mcp login garmin_connect --oauth-client-registration cimd --scopes garmin:read
+```
+
+授权完成后浏览器页面可能自动关闭，因为授权码已回调到 `127.0.0.1` 的临时端口。以终端出现下面的成功信息为准：
+
+```text
+Successfully logged in to MCP server 'garmin_connect'.
+```
+
+再检查：
+
+```bash
+codex mcp list
+```
+
+预期 `garmin_connect` 为 `enabled`，`Auth` 为 `OAuth`。完全退出并重新打开 Codex，在输入框执行 `/mcp`，然后确认工具清单为十二个。可用下面的隐私保护测试做端到端验收：
+
+```text
+调用 garmin_profile，只告诉我成功或失败以及当前可用工具数量，不要显示个人资料字段。
+```
+
+如果终端显示 `failed to write OAuth tokens to keyring`、`file-store.lock` 或 `Operation not permitted`，说明当前命令运行在无权写入 Codex 安全存储的受限环境。关闭该受限终端，在你正常登录的系统终端中重新运行 `codex mcp login`；不要用 `sudo`，并确认自己的账号拥有 `~/.codex`。
+
+### 9.3 可选：静态 Bearer 回退
+
+只有不方便完成 OAuth 的可信客户端才需要静态 Bearer。把以下配置加入可信项目的 `.codex/config.toml`，或个人的 `~/.codex/config.toml`：
 
 ```toml
 [mcp_servers.garmin_connect]
@@ -545,7 +641,7 @@ unset GARMIN_TOKEN
 launchctl setenv GARMIN_MCP_BEARER_TOKEN "$(tr -d '\r\n' < ~/.codex/secrets/garmin-mcp-bearer-token)"
 ```
 
-完全退出并重新打开 Codex，然后执行 `/mcp` 或打开 MCP 设置确认连接。这个本地文件也不要加入任何 Git 仓库。
+完全退出并重新打开 Codex，然后执行 `/mcp` 或打开 MCP 设置确认连接。这个本地文件也不要加入任何 Git 仓库。OAuth 与静态 Bearer 二选一即可，不要把 Garmin session token 当作这个 Bearer。
 
 ## 10. 验收清单
 
@@ -558,10 +654,14 @@ launchctl setenv GARMIN_MCP_BEARER_TOKEN "$(tr -d '\r\n' < ~/.codex/secrets/garm
 - [ ] 3100 只监听 `127.0.0.1`；
 - [ ] `/healthz` 在 VPS 本机返回成功；
 - [ ] OAuth protected-resource metadata 的 resource 和 issuer 正确；
+- [ ] protected-resource metadata 的 `scopes_supported` 只有 `garmin:read`；
 - [ ] 未登录访问 `/mcp` 返回 401；
 - [ ] Auth0 只创建了 `garmin:read` 用户委托授权；
+- [ ] 每个实际使用的 ChatGPT/Codex CIMD 客户端都已单独登记并获得用户委托权限；
 - [ ] `MCP_AUTH0_ALLOWED_SUBJECTS` 是自己的准确 User ID；
-- [ ] ChatGPT 看到十二个工具；
+- [ ] `npm run smoke:http` 输出 `HTTP smoke test passed with 12 tools.`；
+- [ ] ChatGPT 或 Codex 实际看到十二个工具；
+- [ ] 若使用 Codex OAuth，`codex mcp list` 显示 `enabled` 和 `OAuth`；
 - [ ] `garmin_profile` 端到端调用成功；
 - [ ] Git 历史、日志和聊天里没有任何 session、密码或 Bearer。
 
@@ -575,9 +675,13 @@ launchctl setenv GARMIN_MCP_BEARER_TOKEN "$(tr -d '\r\n' < ~/.codex/secrets/garm
 | `502 Bad Gateway` | Node 服务未运行或 Nginx 端口不一致 | 查 `systemctl status`、`journalctl` 和 `127.0.0.1:3100/healthz` |
 | 未登录访问 `/mcp` 返回 401 | 正常的认证挑战 | 继续检查 `WWW-Authenticate` 和 protected-resource metadata |
 | Auth0 登录成功但 MCP 仍返回 401 | audience、scope 或用户 `sub` 不匹配 | 对照三个完全相同的 MCP URL，确认 `garmin:read` 和 allowlist User ID |
+| Codex 授权页显示 `Unknown client: .../oauth/codex/.../client.json` | Auth0 只有 ChatGPT 插件客户端，没有登记 Codex 的 server-specific CIMD | 复制错误中的完整 CIMD URL，在 Auth0 `Import from URL` 创建应用并授予用户委托 `garmin:read`，然后重试登录 |
+| Codex OAuth 浏览器授权后自动关闭 | 授权码已成功回调到本机临时端口 | 这是正常现象；检查终端是否显示 `Successfully logged in`，再运行 `codex mcp list` |
+| `failed to write OAuth tokens to keyring` 或 `file-store.lock` | 登录命令运行在受限沙箱中，无法写安全存储 | 在正常系统终端以自己的账号重试，不要使用 `sudo`，确认 `~/.codex` 归自己所有 |
 | ChatGPT 打开本机 `/authorize` 并得到 404 | 旧连接缓存了内置 OAuth 元数据 | 新建一个全新的连接完成 Auth0 发现，验证后再删除旧连接 |
 | ChatGPT 一直转圈，Auth0 日志没有请求 | 客户端缓存、弹窗/代理/浏览器扩展拦截 | 先检查授权 URL 是否为 Auth0；用新连接测试，并在同一浏览器中临时排除拦截 |
-| ChatGPT 显示的工具不是十二个 | 连接尚未刷新 | 在插件设置执行 Refresh，并在新对话中重新添加工具 |
+| 界面没有单独的“选择 OAuth”步骤 | 新版客户端会从 MCP metadata 自动发现认证 | 继续创建连接并使用 Authenticate；核对跳转域名是 Auth0 即可 |
+| ChatGPT/Codex 仍只显示原来的七个工具 | 客户端保存了扩展前的工具快照，或服务器尚未更新到 v0.2.0 | 先在 VPS 更新、构建并确认 `smoke:http` 为 12；然后 Refresh/Restart。ChatGPT 个人插件仍不更新时创建全新插件，Codex 则重新启动 host 并检查 `/mcp` |
 | HRV、训练准备度或 VO₂max 返回空值 | 设备不支持、历史不足或数据尚未同步 | 先确认 Garmin Connect App 中能看到该指标，再缩小到最近有记录的日期重试 |
 | Mac ChatGPT 应用意外退出 | 客户端问题，不足以证明服务端 OAuth 失败 | 用网页版完成配置；更新/重开客户端，并以 VPS/Auth0 日志判断请求是否到达 |
 | Garmin session 过期 | Garmin 撤销或失效了长期 session | 在可信电脑重新运行 `export-session`，更新 Base64 后重启服务 |
@@ -630,6 +734,8 @@ curl -fsS http://127.0.0.1:3100/healthz
 - 禁止 Auth0 Database Connection 的公开注册；
 - 始终设置 `MCP_AUTH0_ALLOWED_SUBJECTS`；
 - 只授予 `garmin:read` 用户委托权限；
+- 分别核对 ChatGPT 与 Codex 实际使用的 CIMD URL，不授权来源不明的客户端；
+- 交互式 ChatGPT/Codex OAuth 不需要 Client Credentials/Machine-to-Machine 权限；
 - 不公开 3100，不把 Node 服务绑定到 `0.0.0.0`；
 - 所有公网访问必须经过可信 HTTPS；
 - 环境文件为 `0640`，本地 secret 文件为 `0600`；
@@ -641,7 +747,8 @@ curl -fsS http://127.0.0.1:3100/healthz
 
 - [OpenAI：将远程 MCP 连接到 ChatGPT](https://developers.openai.com/plugins/deploy/connect-chatgpt)
 - [OpenAI：MCP/OAuth 认证要求](https://developers.openai.com/plugins/build/auth)
-- [OpenAI：Codex MCP 配置](https://developers.openai.com/codex/mcp/)
+- [OpenAI：Codex MCP 配置、OAuth 与 CIMD](https://developers.openai.com/codex/extend/mcp)
 - [Auth0：为 MCP Server 配置授权](https://auth0.com/ai/docs/mcp/get-started/authorization-for-your-mcp-server)
-- [Auth0：Manual CIMD Registration](https://auth0.com/ai/docs/mcp/guides/registering-your-mcp-client-application/manual-cimd-registration)
+- [Auth0：Register Applications with CIMD](https://auth0.com/docs/get-started/auth0-overview/create-applications/register-applications-with-cimd)
+- [Auth0：API Access Policies for Applications](https://auth0.com/docs/get-started/apis/api-access-policies-for-applications)
 - [Auth0：第三方应用和 API client grants](https://auth0.com/docs/get-started/applications/third-party-applications/configure-third-party-applications)

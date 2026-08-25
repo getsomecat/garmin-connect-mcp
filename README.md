@@ -8,7 +8,7 @@ It is written in TypeScript with the MCP SDK, `garmin-connect`, and `dotenv`. It
 
 ## Deployment tutorial
 
-For a complete walkthrough starting with your own VPS and domain—including DNS/HTTPS, an optional existing Hexo/Nginx site, Garmin China or global accounts, Auth0 OAuth, ChatGPT, Codex, Cloudflare notes, troubleshooting, and rollback—see the [Chinese deployment guide](docs/deployment-guide.zh-CN.md).
+For a complete walkthrough starting with your own VPS and domain—including DNS/HTTPS, an optional existing Hexo/Nginx site, Garmin China or global accounts, Auth0 OAuth, the distinct ChatGPT and Codex CIMD clients, twelve-tool verification, Cloudflare notes, troubleshooting, and rollback—see the [Chinese deployment guide](docs/deployment-guide.zh-CN.md).
 
 ## Tools
 
@@ -85,7 +85,11 @@ The token is sensitive. Do not commit it, paste it into a chat, or include it in
 
 ## Codex MCP configuration
 
-Codex supports local stdio MCP servers in `~/.codex/config.toml` or a trusted project's `.codex/config.toml`. Build the project first, then add an entry using absolute paths:
+Codex supports both local stdio servers and remote Streamable HTTP servers. The ChatGPT desktop app, Codex CLI, and IDE extension share the MCP configuration for the same Codex host.
+
+### Local stdio
+
+Put the server in `~/.codex/config.toml` or a trusted project's `.codex/config.toml`. Build the project first, then add an entry using absolute paths:
 
 ```toml
 [mcp_servers.garmin_connect]
@@ -105,7 +109,23 @@ args = ["/absolute/path/to/garmin-connect-mcp/dist/src/index.js"]
 env_vars = ["GARMIN_SESSION_TOKEN", "GARMIN_USERNAME", "GARMIN_PASSWORD", "GARMIN_REGION"]
 ```
 
-Restart Codex after editing the configuration, then use `/mcp` or the MCP server settings to confirm the server is connected. See the [official Codex MCP documentation](https://developers.openai.com/codex/mcp/) for all supported options.
+Restart Codex after editing the configuration, then use `/mcp` or the MCP server settings to confirm the server is connected.
+
+### Remote OAuth from a VPS
+
+After deploying the HTTPS endpoint and Auth0 configuration below, add and authenticate it from a normal local terminal:
+
+```bash
+codex mcp add garmin_connect --url https://garmin.example.com/mcp
+codex mcp login garmin_connect --oauth-client-registration cimd --scopes garmin:read
+codex mcp list
+```
+
+The expected final status is `enabled` with `Auth` set to `OAuth`. You can instead use the desktop UI: add a **Streamable HTTP** MCP server with the same URL, save, restart, and select **Authenticate**.
+
+Codex uses a server-specific CIMD client such as `https://chatgpt.com/oauth/codex/<callback_id>/client.json`. It is not the same client as a hosted ChatGPT plugin. If Auth0 reports `Unknown client`, copy the exact CIMD URL from the error or authorization request, import it in Auth0 with **Create Application → Import from URL**, grant that application user-delegated `garmin:read`, and run the login command again. The browser may close after the loopback callback; use the terminal success message and `codex mcp list` as the result.
+
+See the [official Codex MCP documentation](https://developers.openai.com/codex/extend/mcp) for the current UI, CLI, OAuth, CIMD, and callback behavior.
 
 ## Other MCP clients
 
@@ -125,9 +145,9 @@ Use the same stdio command:
 
 ## Private Streamable HTTP deployment
 
-The HTTP transport is intended to run behind an HTTPS reverse proxy. It is stateless at the MCP layer and uses JSON responses. Configure a static bearer token, exactly one OAuth option, or a static token plus one OAuth option. Keeping the static token alongside OAuth lets an existing Codex client continue working while ChatGPT uses OAuth.
+The HTTP transport is intended to run behind an HTTPS reverse proxy. It is stateless at the MCP layer and uses JSON responses. Configure a static bearer token, exactly one OAuth option, or a static token plus one OAuth option. Codex can use the same OAuth deployment as ChatGPT; the independent static token remains available as an optional fallback for clients that need it.
 
-Generate an independent MCP bearer token (this is not the Garmin session token):
+If you want the static-bearer fallback, generate an independent MCP bearer token (this is not the Garmin session token):
 
 ```bash
 openssl rand -hex 32
@@ -142,6 +162,8 @@ MCP_HTTP_PORT=3100
 MCP_HTTP_PATH=/mcp
 MCP_BEARER_TOKEN=the-generated-bearer-token
 ```
+
+Omit `MCP_BEARER_TOKEN` for an OAuth-only deployment.
 
 Build and start it:
 
@@ -171,9 +193,9 @@ export GARMIN_MCP_BEARER_TOKEN='the-generated-bearer-token'
 
 Do not use the Garmin session token as the HTTP bearer token. Do not expose the Node.js port publicly, put secrets in Nginx configuration, or deploy the HTTP transport without HTTPS.
 
-## Private ChatGPT plugin with OAuth
+## Private ChatGPT and Codex access with OAuth
 
-ChatGPT connections that access personal Garmin data should use OAuth. Auth0 is the recommended authorization server: it handles login, discovery, client metadata, PKCE, token issuance, signing-key rotation, and account security independently of the Garmin MCP process. The MCP server validates Auth0 access tokens locally against the tenant's RS256 JWKS, requires `garmin:read`, binds the token to the exact MCP resource, and can restrict access to specific Auth0 subject IDs.
+Remote connections that access personal Garmin data should use OAuth. Auth0 is the recommended authorization server: it handles login, discovery, client metadata, PKCE, token issuance, signing-key rotation, and account security independently of the Garmin MCP process. The MCP server validates Auth0 access tokens locally against the tenant's RS256 JWKS, requires `garmin:read`, binds the token to the exact MCP resource, and can restrict access to specific Auth0 subject IDs.
 
 ### Recommended: Auth0
 
@@ -213,7 +235,14 @@ curl -fsS https://garmin.example.com/.well-known/oauth-protected-resource/mcp
 
 The returned `authorization_servers` value must be the Auth0 tenant URL, and `resource` must exactly match `MCP_PUBLIC_URL`.
 
-6. Add `https://garmin.example.com/mcp` as a personal ChatGPT plugin. With CIMD enabled, ChatGPT can identify itself using its published client metadata at `https://chatgpt.com/oauth/client.json`; issuer identification gives it the stable callback `https://chatgpt.com/connector_platform_oauth_redirect`. If the endpoint was previously connected to the built-in provider, remove that old plugin connection first and add it again so ChatGPT performs fresh discovery.
+6. Register and authorize the client or clients you intend to use:
+
+   - **Hosted ChatGPT plugin:** add `https://garmin.example.com/mcp` as a personal plugin. With issuer identification enabled, ChatGPT can use `https://chatgpt.com/oauth/client.json` and the stable callback `https://chatgpt.com/connector_platform_oauth_redirect`.
+   - **Direct Codex MCP:** initiate `codex mcp login` once, then import the exact `https://chatgpt.com/oauth/codex/<callback_id>/client.json` shown in that authorization request. Grant this separate Auth0 application user-delegated `garmin:read`, then retry login.
+
+   In either case, enable the intended Auth0 database/domain connection for the third-party CIMD application. If the endpoint was connected before authentication or tool metadata changed, create a fresh connection or restart the Codex host so discovery runs again.
+
+7. Verify that the client discovers all twelve tools and that a privacy-preserving `garmin_profile` call succeeds. Seeing only the original seven tools means the client is still using an older metadata snapshot, not that the five training tools are unavailable on the server.
 
 See the official [OpenAI OAuth requirements](https://developers.openai.com/plugins/build/auth), [Auth0 MCP authorization guide](https://auth0.com/ai/docs/mcp/get-started/authorization-for-your-mcp-server), and [Auth0 CIMD guide](https://auth0.com/docs/get-started/auth0-overview/create-applications/register-applications-with-cimd).
 
