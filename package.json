@@ -12,6 +12,7 @@
   "files": [
     "dist",
     "deploy",
+    "docs",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",

@@ -6,6 +6,10 @@ This first version is written in TypeScript with the MCP SDK, `garmin-connect`, 
 
 > `garmin-connect` uses Garmin's unofficial web APIs. Endpoints can change without notice, and Garmin may rate-limit automated access.
 
+## Deployment tutorial
+
+For a complete walkthrough starting with your own VPS and domain—including DNS/HTTPS, an optional existing Hexo/Nginx site, Garmin China or global accounts, Auth0 OAuth, ChatGPT, Codex, Cloudflare notes, troubleshooting, and rollback—see the [Chinese deployment guide](docs/deployment-guide.zh-CN.md).
+
 ## Tools
 
 | Tool | Purpose |
