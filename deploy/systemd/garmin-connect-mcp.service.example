@@ -1,0 +1,32 @@
+[Unit]
+Description=Garmin Connect MCP Server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=garmin-mcp
+Group=garmin-mcp
+WorkingDirectory=/opt/garmin-connect-mcp
+EnvironmentFile=/etc/garmin-connect-mcp.env
+ExecStart=/usr/bin/node /opt/garmin-connect-mcp/dist/src/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+StateDirectory=garmin-connect-mcp
+StateDirectoryMode=0700
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
