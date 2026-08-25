@@ -1,6 +1,6 @@
 {
   "name": "garmin-connect-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A read-only MCP server for Garmin Connect health and fitness data",
   "type": "module",
   "main": "dist/src/index.js",
@@ -26,6 +26,7 @@
     "export-session": "tsx scripts/export-session.ts",
     "hash-oauth-password": "tsx scripts/hash-oauth-password.ts",
     "smoke:http": "tsx scripts/smoke-http.ts",
+    "smoke:metrics": "tsx scripts/smoke-metrics.ts",
     "smoke:auth0": "tsx scripts/smoke-auth0.ts",
     "smoke:oauth": "tsx scripts/smoke-oauth.ts",
     "prepack": "npm run build"

@@ -57,12 +57,22 @@ export function optionalString(value: unknown): string | undefined {
   return value
 }
 
+export function optionalBoolean(value: unknown, fallback: boolean, name: string): boolean {
+  if (value === undefined) return fallback
+  if (typeof value !== 'boolean') throw new Error(`${name} must be a boolean.`)
+  return value
+}
+
 export async function mapDates<T>(
   dates: string[],
   fetch: (date: string) => Promise<T>,
 ): Promise<T | T[]> {
   const results: T[] = []
   for (const date of dates) results.push(await fetch(date))
+  return results.length === 1 ? results[0] as T : results
+}
+
+export function oneOrMany<T>(results: T[]): T | T[] {
   return results.length === 1 ? results[0] as T : results
 }
 
