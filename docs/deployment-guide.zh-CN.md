@@ -19,7 +19,7 @@
 - 你的电脑关机后，VPS 上的服务仍可使用；
 - 在任何新对话中重新选择 Garmin Connect 即可，不必永远留在同一个对话。
 
-项目提供七个只读工具：
+项目提供十二个只读工具：
 
 | 工具 | 用途 |
 |---|---|
@@ -30,8 +30,15 @@
 | `garmin_weight` | 体重和身体成分 |
 | `garmin_workouts` | Garmin Connect 中保存的训练计划 |
 | `garmin_profile` | 精简的个人资料摘要 |
+| `garmin_hrv` | 昨夜 HRV、7 日均值、个人基线和状态 |
+| `garmin_body_battery` | Body Battery 当前值、充入/消耗和可选日内曲线 |
+| `garmin_training_readiness` | 训练准备度、恢复时间及各影响因素 |
+| `garmin_training_status` | 训练状态、急性/慢性负荷、负荷比和负荷平衡 |
+| `garmin_vo2max` | 跑步/骑行 VO₂max 当前值及历史趋势 |
 
 日期范围最多为 31 天。
+
+后五项指标需要兼容的 Garmin 设备和足够的已同步历史。Garmin Connect 尚未计算某项指标时，工具会返回 `hasData: false` 或空字段，而不是把缺失值当成 0。`garmin_body_battery` 默认只返回每日摘要；只有查询单日时才可通过 `include_samples=true` 获取日内曲线。
 
 ## 架构和三种凭据
 
@@ -200,11 +207,12 @@ sudo chown -R garmin-mcp:garmin-mcp /opt/garmin-connect-mcp
 cd /opt/garmin-connect-mcp
 sudo -u garmin-mcp npm ci
 sudo -u garmin-mcp npm run build
+sudo -u garmin-mcp npm run smoke:metrics
 sudo -u garmin-mcp npm run smoke:http
 sudo -u garmin-mcp npm run smoke:auth0
 ```
 
-四个命令都成功后再配置真实凭据。`npm run smoke:auth0` 使用测试配置，不会登录你的 Garmin 或 Auth0 账号。
+五个命令都成功后再配置真实凭据。`npm run smoke:metrics` 使用合成健康数据，`npm run smoke:auth0` 使用测试配置；两者都不会登录你的 Garmin 或 Auth0 账号。
 
 ## 3. 在本地电脑导出 Garmin session
 
@@ -478,7 +486,7 @@ OpenAI 官方流程要求先有公网 HTTPS Streamable HTTP MCP endpoint，再�
 6. 确认授权服务器是 `https://your-tenant.us.auth0.com/`；
 7. 确认 scope 包含且只需要 `garmin:read`；
 8. 创建连接，使用刚创建的 Auth0 用户登录并授权；
-9. 刷新工具列表，确认出现七个 Garmin 工具。
+9. 刷新工具列表，确认出现十二个 Garmin 工具。
 
 第一次测试建议使用不展示个人资料内容的请求：
 
@@ -490,6 +498,8 @@ OpenAI 官方流程要求先有公网 HTTPS Streamable HTTP MCP endpoint，再�
 
 - “分析我最近 14 天的跑步训练量和恢复状态。”
 - “比较最近 7 天和之前 7 天的睡眠、静息心率和步数。”
+- “比较最近 7 天的 HRV、Body Battery、训练准备度和恢复时间。”
+- “读取急性/慢性训练负荷、负荷比、训练状态和最近 30 天 VO₂max 趋势。”
 - “列出本周训练，但不要输出个人资料字段。”
 
 在新对话中，需要从工具菜单重新选择 Garmin Connect；无需重新部署。手机端登录同一 ChatGPT 账号后，如果该客户端显示这个开发者连接，也可以选择使用；如果移动端暂时不显示，请用 ChatGPT 网页版或桌面版。是否展示个人开发者连接可能受客户端版本和工作区策略影响。
@@ -551,7 +561,7 @@ launchctl setenv GARMIN_MCP_BEARER_TOKEN "$(tr -d '\r\n' < ~/.codex/secrets/garm
 - [ ] 未登录访问 `/mcp` 返回 401；
 - [ ] Auth0 只创建了 `garmin:read` 用户委托授权；
 - [ ] `MCP_AUTH0_ALLOWED_SUBJECTS` 是自己的准确 User ID；
-- [ ] ChatGPT 看到七个工具；
+- [ ] ChatGPT 看到十二个工具；
 - [ ] `garmin_profile` 端到端调用成功；
 - [ ] Git 历史、日志和聊天里没有任何 session、密码或 Bearer。
 
@@ -567,7 +577,8 @@ launchctl setenv GARMIN_MCP_BEARER_TOKEN "$(tr -d '\r\n' < ~/.codex/secrets/garm
 | Auth0 登录成功但 MCP 仍返回 401 | audience、scope 或用户 `sub` 不匹配 | 对照三个完全相同的 MCP URL，确认 `garmin:read` 和 allowlist User ID |
 | ChatGPT 打开本机 `/authorize` 并得到 404 | 旧连接缓存了内置 OAuth 元数据 | 新建一个全新的连接完成 Auth0 发现，验证后再删除旧连接 |
 | ChatGPT 一直转圈，Auth0 日志没有请求 | 客户端缓存、弹窗/代理/浏览器扩展拦截 | 先检查授权 URL 是否为 Auth0；用新连接测试，并在同一浏览器中临时排除拦截 |
-| ChatGPT 显示的工具不是七个 | 连接尚未刷新 | 在插件设置执行 Refresh，并在新对话中重新添加工具 |
+| ChatGPT 显示的工具不是十二个 | 连接尚未刷新 | 在插件设置执行 Refresh，并在新对话中重新添加工具 |
+| HRV、训练准备度或 VO₂max 返回空值 | 设备不支持、历史不足或数据尚未同步 | 先确认 Garmin Connect App 中能看到该指标，再缩小到最近有记录的日期重试 |
 | Mac ChatGPT 应用意外退出 | 客户端问题，不足以证明服务端 OAuth 失败 | 用网页版完成配置；更新/重开客户端，并以 VPS/Auth0 日志判断请求是否到达 |
 | Garmin session 过期 | Garmin 撤销或失效了长期 session | 在可信电脑重新运行 `export-session`，更新 Base64 后重启服务 |
 | 加入 MCP 后博客路由异常 | snippet 放错 server 块，或现有 `^~ /` 抢占路径 | 恢复备份、运行 `nginx -t`，只在正确 HTTPS server 中加入 MCP location |

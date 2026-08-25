@@ -95,7 +95,7 @@ try {
   })
   await client.connect(transport as unknown as Parameters<typeof client.connect>[0])
   const listed = await client.listTools()
-  assert(listed.tools.length === 7, `Expected 7 tools, received ${listed.tools.length}.`)
+  assert(listed.tools.length === 12, `Expected 12 tools, received ${listed.tools.length}.`)
   const securitySchemes = (listed.tools[0]?._meta as { securitySchemes?: unknown } | undefined)
     ?.securitySchemes
   assert(Array.isArray(securitySchemes), 'Auth0 tool security metadata is missing.')

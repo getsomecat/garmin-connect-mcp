@@ -15,7 +15,7 @@ export function createServer(config: Config, client: GarminClient = new GarminCl
   const toolsByName = new Map(tools.map((tool) => [tool.definition.name, tool]))
 
   const server = new Server(
-    { name: 'garmin-connect-mcp', version: '0.1.0' },
+    { name: 'garmin-connect-mcp', version: '0.2.0' },
     {
       capabilities: { tools: {} },
       instructions:

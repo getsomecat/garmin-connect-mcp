@@ -43,6 +43,11 @@ try {
     'garmin_weight',
     'garmin_workouts',
     'garmin_profile',
+    'garmin_hrv',
+    'garmin_body_battery',
+    'garmin_training_readiness',
+    'garmin_training_status',
+    'garmin_vo2max',
   ]
   const actual = listed.tools.map((tool) => tool.name)
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {

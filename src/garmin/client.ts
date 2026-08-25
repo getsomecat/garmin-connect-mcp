@@ -79,6 +79,32 @@ export class GarminClient {
       : this.client.getHeartRate(toLocalDate(date)))
   }
 
+  async getHrv(date: string): Promise<unknown> {
+    return this.cached(`hrv:${date}`, () => this.apiGet(`/hrv-service/hrv/${date}`))
+  }
+
+  async getBodyBattery(startDate: string, endDate: string): Promise<unknown[]> {
+    return this.cached(`body-battery:${startDate}:${endDate}`, async () => asArray(await this.apiGet(
+      '/wellness-service/wellness/bodyBattery/reports/daily',
+      { startDate, endDate },
+    )))
+  }
+
+  async getTrainingReadiness(date: string): Promise<unknown> {
+    return this.cached(`training-readiness:${date}`, () =>
+      this.apiGet(`/metrics-service/metrics/trainingreadiness/${date}`))
+  }
+
+  async getTrainingStatus(date: string): Promise<unknown> {
+    return this.cached(`training-status:${date}`, () =>
+      this.apiGet(`/metrics-service/metrics/trainingstatus/aggregated/${date}`))
+  }
+
+  async getMaxMetrics(startDate: string, endDate: string): Promise<unknown> {
+    return this.cached(`max-metrics:${startDate}:${endDate}`, () =>
+      this.apiGet(`/metrics-service/metrics/maxmet/daily/${startDate}/${endDate}`))
+  }
+
   async getWeight(date: string): Promise<unknown> {
     return this.cached(`weight:${date}`, () => this.isDiSession()
       ? this.apiGet(`/weight-service/weight/dayview/${date}`)
@@ -176,13 +202,13 @@ export class GarminClient {
     params: Record<string, string | number> = {},
   ): Promise<unknown> {
     const session = this.sessionToken
-    if (!session || !isDiSessionToken(session)) {
-      throw new Error('A Garmin DI session is required for this API request.')
-    }
+    if (!session) throw new Error('A Garmin session is required for this API request.')
 
     const domain = this.config.region === 'cn' ? 'garmin.cn' : 'garmin.com'
     const url = new URL(`https://connectapi.${domain}${path}`)
     for (const [name, value] of Object.entries(params)) url.searchParams.set(name, String(value))
+
+    if (!isDiSessionToken(session)) return this.client.get(url.toString())
 
     const response = await fetch(url, {
       headers: {

@@ -1,8 +1,8 @@
 # Garmin Connect MCP Server
 
-A read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for Garmin Connect. It exposes recent activities, sleep, steps, heart rate, weight, workouts, and profile data to Codex and other MCP clients. It supports local stdio and private Streamable HTTP deployments with static bearer, Auth0, or a built-in single-user OAuth 2.1 fallback.
+A read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for Garmin Connect. It exposes activities, daily health data, HRV, Body Battery, training readiness and recovery, training load and status, VO2 max, workouts, and profile data to Codex and other MCP clients. It supports local stdio and private Streamable HTTP deployments with static bearer, Auth0, or a built-in single-user OAuth 2.1 fallback.
 
-This first version is written in TypeScript with the MCP SDK, `garmin-connect`, and `dotenv`. It has no DeepSeek Harness or Cordis dependency.
+It is written in TypeScript with the MCP SDK, `garmin-connect`, and `dotenv`. It has no DeepSeek Harness or Cordis dependency.
 
 > `garmin-connect` uses Garmin's unofficial web APIs. Endpoints can change without notice, and Garmin may rate-limit automated access.
 
@@ -21,8 +21,21 @@ For a complete walkthrough starting with your own VPS and domain—including DNS
 | `garmin_weight` | Weight and body-composition data |
 | `garmin_workouts` | Planned workouts saved in Garmin Connect |
 | `garmin_profile` | Compact user profile summary |
+| `garmin_hrv` | Nightly HRV, seven-day average, personal baseline, and status |
+| `garmin_body_battery` | Body Battery level, charge/drain, and optional intraday samples |
+| `garmin_training_readiness` | Readiness score, recovery time, and contributing factors |
+| `garmin_training_status` | Training status, acute/chronic load, ACWR, load balance, and VO2 max |
+| `garmin_vo2max` | Running/cycling VO2 max history with a current-value fallback |
 
 All tools are read-only. Date ranges are inclusive and limited to 31 days.
+
+Training metrics require a compatible Garmin device and enough synced history. A valid request can therefore return `hasData: false` or null metric fields when Garmin Connect has not calculated that value. `garmin_body_battery` returns compact daily summaries by default; set `include_samples` to `true` for one date to include its intraday series.
+
+Example requests:
+
+- “Compare my HRV, Body Battery, and training readiness over the last seven days.”
+- “Show my acute and chronic load, workload ratio, training status, and recovery time.”
+- “Analyze my running VO2 max trend for the last 30 days.”
 
 ## Requirements
 
@@ -234,7 +247,7 @@ To add the fallback provider to ChatGPT as a personal plugin:
 
 1. In ChatGPT settings, open **Security and login** and enable **Developer mode**.
 2. Open **Plugins**, select the add (`+`) action, and enter `https://garmin.example.com/mcp`.
-3. Review the seven read-only tools and start the OAuth connection.
+3. Review the twelve read-only tools and start the OAuth connection.
 4. On the private authorization page hosted by your server, enter the separate access password and approve.
 5. Test with a low-risk request such as “读取我的 Garmin 个人资料”。
 
@@ -278,6 +291,7 @@ The client de-duplicates concurrent requests, caches successful responses, refre
 
 ```bash
 npm run build
+npm run smoke:metrics
 npm run smoke:http
 npm run smoke:auth0
 npm run smoke:oauth
