@@ -155,7 +155,13 @@ export async function startHttpServer(config: Config): Promise<HttpRuntime> {
     host: config.httpHost,
     port: address.port,
     path: config.httpPath,
-    close: () => closeNodeServer(nodeServer),
+    close: async () => {
+      try {
+        await closeNodeServer(nodeServer)
+      } finally {
+        await garminClient.close()
+      }
+    },
   }
 }
 

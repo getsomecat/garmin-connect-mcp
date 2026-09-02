@@ -52,7 +52,13 @@ export interface GarminDiSessionToken {
   refresh_token: string
   client_id: string
   expires_at: number
+  refresh_token_expires_at?: number
   token_type: 'Bearer'
+}
+
+export interface GarminProfileIdentity {
+  profileId: number
+  displayName?: string
 }
 
 export type GarminSessionToken = GarminLegacySessionToken | GarminDiSessionToken
@@ -128,6 +134,7 @@ export function parseSessionToken(value: string): GarminSessionToken {
     ) {
       throw new Error('GARMIN_SESSION_TOKEN contains an invalid DI session.')
     }
+    const refreshTokenExpiresAt = finiteTimestamp(token.refresh_token_expires_at)
     return {
       auth_type: 'di',
       version: 2,
@@ -135,6 +142,9 @@ export function parseSessionToken(value: string): GarminSessionToken {
       refresh_token: token.refresh_token,
       client_id: token.client_id,
       expires_at: finiteTimestamp(token.expires_at) ?? jwtExpiry(token.access_token) ?? 0,
+      ...(refreshTokenExpiresAt === undefined
+        ? {}
+        : { refresh_token_expires_at: refreshTokenExpiresAt }),
       token_type: 'Bearer',
     }
   }
@@ -325,12 +335,14 @@ async function refreshDiSession(
   return diSessionFromPayload(
     { ...payload, refresh_token: payload.refresh_token ?? session.refresh_token },
     session.client_id,
+    session,
   )
 }
 
 function diSessionFromPayload(
   payload: Record<string, unknown>,
   fallbackClientId: string,
+  previous?: GarminDiSessionToken,
 ): GarminDiSessionToken {
   const accessToken = String(payload.access_token)
   const refreshToken = String(payload.refresh_token)
@@ -338,6 +350,11 @@ function diSessionFromPayload(
   const expiresIn = Number(payload.expires_in)
   const expiresAt = jwtExpiry(accessToken)
     ?? Math.floor(Date.now() / 1_000) + (Number.isFinite(expiresIn) ? expiresIn : 3_600)
+  const refreshExpiresIn = Number(payload.refresh_token_expires_in)
+  const refreshExpiresAt = jwtExpiry(refreshToken)
+    ?? (Number.isFinite(refreshExpiresIn) && refreshExpiresIn > 0
+      ? Math.floor(Date.now() / 1_000) + refreshExpiresIn
+      : previous?.refresh_token_expires_at)
   return {
     auth_type: 'di',
     version: 2,
@@ -345,6 +362,7 @@ function diSessionFromPayload(
     refresh_token: refreshToken,
     client_id: clientId,
     expires_at: expiresAt,
+    ...(refreshExpiresAt ? { refresh_token_expires_at: refreshExpiresAt } : {}),
     token_type: 'Bearer',
   }
 }
@@ -353,6 +371,20 @@ async function validateSession(
   session: GarminSessionToken,
   endpoints: GarminEndpoints,
 ): Promise<void> {
+  await getSessionProfileIdentityAtEndpoint(session, endpoints)
+}
+
+export async function getSessionProfileIdentity(
+  session: GarminSessionToken,
+  region: GarminRegion,
+): Promise<GarminProfileIdentity> {
+  return getSessionProfileIdentityAtEndpoint(session, garminEndpoints(region))
+}
+
+async function getSessionProfileIdentityAtEndpoint(
+  session: GarminSessionToken,
+  endpoints: GarminEndpoints,
+): Promise<GarminProfileIdentity> {
   const accessToken = isDiSessionToken(session) ? session.access_token : session.oauth2.access_token
   const response = await fetch(`${endpoints.connectApi}/userprofile-service/socialProfile`, {
     headers: {
@@ -361,7 +393,18 @@ async function validateSession(
       Accept: 'application/json',
     },
   })
-  await ensureResponseOk(response, 'Garmin session validation')
+  const profile = object(await responseJson(response, 'Garmin session validation'))
+  const profileId = Number(profile?.profileId)
+  if (!Number.isSafeInteger(profileId) || profileId <= 0) {
+    throw new GarminAuthenticationError('Garmin session validation returned an invalid profile identity.')
+  }
+  const displayName = typeof profile?.displayName === 'string' && profile.displayName.trim()
+    ? profile.displayName.trim()
+    : undefined
+  return {
+    profileId,
+    ...(displayName ? { displayName } : {}),
+  }
 }
 
 async function exchangeOAuth1ForOAuth2(

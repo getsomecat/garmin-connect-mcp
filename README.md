@@ -1,6 +1,6 @@
 # Garmin Connect MCP Server
 
-A read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for Garmin Connect. It exposes activities, daily health data, HRV, Body Battery, training readiness and recovery, training load and status, VO2 max, workouts, and profile data to Codex and other MCP clients. It supports local stdio and private Streamable HTTP deployments with static bearer, Auth0, or a built-in single-user OAuth 2.1 fallback.
+A read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for Garmin Connect. It exposes activities, daily health data, HRV, Body Battery, training readiness and recovery, training load and status, VO2 max, workouts, profile data, and guarded running-coaching guidance to Codex and other MCP clients. It supports local stdio and private Streamable HTTP deployments with static bearer, Auth0, or a built-in single-user OAuth 2.1 fallback.
 
 It is written in TypeScript with the MCP SDK, `garmin-connect`, and `dotenv`. It has no DeepSeek Harness or Cordis dependency.
 
@@ -8,7 +8,7 @@ It is written in TypeScript with the MCP SDK, `garmin-connect`, and `dotenv`. It
 
 ## Deployment tutorial
 
-For a complete walkthrough starting with your own VPS and domain—including DNS/HTTPS, an optional existing Hexo/Nginx site, Garmin China or global accounts, Auth0 OAuth, the distinct ChatGPT and Codex CIMD clients, twelve-tool verification, Cloudflare notes, troubleshooting, and rollback—see the [Chinese deployment guide](docs/deployment-guide.zh-CN.md).
+For a complete walkthrough starting with your own VPS and domain—including DNS/HTTPS, an optional existing Hexo/Nginx site, Garmin China or global regions, a bound private DI session, Auth0 OAuth, the distinct ChatGPT and Codex CIMD clients, thirteen-tool verification, Cloudflare notes, troubleshooting, and rollback—see the [Chinese deployment guide](docs/deployment-guide.zh-CN.md).
 
 ## Tools
 
@@ -26,6 +26,7 @@ For a complete walkthrough starting with your own VPS and domain—including DNS
 | `garmin_training_readiness` | Readiness score, recovery time, and contributing factors |
 | `garmin_training_status` | Training status, acute/chronic load, ACWR, load balance, and VO2 max |
 | `garmin_vo2max` | Running/cycling VO2 max history with a current-value fallback |
+| `garmin_running_advice` | Explain eight workout types and Hansons, Daniels, Norwegian-threshold, and polarized training; personalized mode requires a complete intake and safety gate |
 
 All tools are read-only. Date ranges are inclusive and limited to 31 days.
 
@@ -36,6 +37,10 @@ Example requests:
 - “Compare my HRV, Body Battery, and training readiness over the last seven days.”
 - “Show my acute and chronic load, workload ratio, training status, and recovery time.”
 - “Analyze my running VO2 max trend for the last 30 days.”
+- “Explain how Daniels and polarized training differ; do not make me a plan yet.”
+- “After completing the safety intake, suggest a conservative approach for my next race.”
+
+`garmin_running_advice` has two modes. `explain` returns educational material without pretending it is a personal plan. `personalized` first requires the athlete's goal, current-performance basis, training history, availability, health/recovery constraints, warning-symptom answer, load preference, quality-session ceiling, and intensity-guidance preference. Missing or contradictory fields produce focused follow-up questions instead of guessed training. Reported chest discomfort, unusual breathlessness with mild activity, fainting/dizziness, or abnormal palpitations stop the coaching response before Garmin activities are read. The tool does not diagnose or replace medical care.
 
 ## Requirements
 
@@ -57,31 +62,30 @@ Copy the environment template:
 cp .env.example .env
 ```
 
-Set either:
-
-- `GARMIN_SESSION_TOKEN`, or
-- both `GARMIN_USERNAME` and `GARMIN_PASSWORD`
+Set `GARMIN_USERNAME` and `GARMIN_REGION`. Set `GARMIN_PASSWORD` only for the initial interactive session export, then remove it. The recommended runtime credential is the private session file created in the next section.
 
 For Garmin China accounts, set `GARMIN_REGION=cn`. The default is `global`.
 
-## Export a session token
+## Create the private Garmin session
 
 Session export is intentionally a local script, not an MCP tool, so a model cannot request or reveal the credential.
 
-1. Put `GARMIN_USERNAME` and `GARMIN_PASSWORD` in `.env`.
+1. Put `GARMIN_USERNAME`, `GARMIN_PASSWORD`, and the correct `GARMIN_REGION` in `.env`.
 2. Run:
 
 ```bash
 umask 077
-npm run --silent export-session > session-token.txt
+npm run --silent export-session
 ```
 
 If Garmin requires multi-factor authentication, the script prompts for the one-time code sent by email, SMS, or your authenticator app. The code is used only for that login.
 
-3. Copy the JSON value from `session-token.txt` into `GARMIN_SESSION_TOKEN` in `.env`.
-4. Remove `GARMIN_PASSWORD` if you want token-only authentication, then securely delete the temporary token file.
+3. The script writes `~/.config/garmin-connect-mcp/session.json` by default. Set the absolute `GARMIN_SESSION_TOKEN_FILE` path or pass `--output /absolute/path/session.json` when the service needs another location.
+4. Remove `GARMIN_PASSWORD`. Keep `GARMIN_USERNAME` and `GARMIN_REGION`; their normalized identity is part of the file binding.
 
-The token is sensitive. Do not commit it, paste it into a chat, or include it in logs.
+The file is mode `0600` inside a mode `0700` directory, is atomically replaced after refresh, and is bound to the normalized Garmin username, region, and authenticated Garmin profile ID. A process lock prevents two server processes from mutating the same single-user session concurrently. The server has no account selector or multi-user mode. The session remains equivalent to a password: do not commit it, paste it into a chat, or include it in logs. `--stdout` exists only as an explicit legacy migration escape hatch and exposes the credential.
+
+To migrate an existing inline DI session without logging in again, temporarily configure all of `GARMIN_USERNAME`, `GARMIN_REGION`, `GARMIN_SESSION_TOKEN_FILE`, and the existing `GARMIN_SESSION_TOKEN`/`GARMIN_SESSION_TOKEN_B64`. After one successful Garmin tool call creates and validates the private file, remove the inline token and restart. Legacy OAuth1 sessions cannot be converted this way; create a new DI session with `--force-login`.
 
 ## Codex MCP configuration
 
@@ -106,7 +110,7 @@ The `cwd` lets `dotenv` load the repository's `.env`. Alternatively, keep creden
 [mcp_servers.garmin_connect]
 command = "node"
 args = ["/absolute/path/to/garmin-connect-mcp/dist/src/index.js"]
-env_vars = ["GARMIN_SESSION_TOKEN", "GARMIN_USERNAME", "GARMIN_PASSWORD", "GARMIN_REGION"]
+env_vars = ["GARMIN_USERNAME", "GARMIN_SESSION_TOKEN_FILE", "GARMIN_REGION"]
 ```
 
 Restart Codex after editing the configuration, then use `/mcp` or the MCP server settings to confirm the server is connected.
@@ -242,7 +246,7 @@ The returned `authorization_servers` value must be the Auth0 tenant URL, and `re
 
    In either case, enable the intended Auth0 database/domain connection for the third-party CIMD application. If the endpoint was connected before authentication or tool metadata changed, create a fresh connection or restart the Codex host so discovery runs again.
 
-7. Verify that the client discovers all twelve tools and that a privacy-preserving `garmin_profile` call succeeds. Seeing only the original seven tools means the client is still using an older metadata snapshot, not that the five training tools are unavailable on the server.
+7. Verify that the client discovers all thirteen tools and that a privacy-preserving `garmin_profile` call succeeds. Seeing only seven or twelve tools means the client is using an older metadata snapshot.
 
 See the official [OpenAI OAuth requirements](https://developers.openai.com/plugins/build/auth), [Auth0 MCP authorization guide](https://auth0.com/ai/docs/mcp/get-started/authorization-for-your-mcp-server), and [Auth0 CIMD guide](https://auth0.com/docs/get-started/auth0-overview/create-applications/register-applications-with-cimd).
 
@@ -276,7 +280,7 @@ To add the fallback provider to ChatGPT as a personal plugin:
 
 1. In ChatGPT settings, open **Security and login** and enable **Developer mode**.
 2. Open **Plugins**, select the add (`+`) action, and enter `https://garmin.example.com/mcp`.
-3. Review the twelve read-only tools and start the OAuth connection.
+3. Review the thirteen read-only tools and start the OAuth connection.
 4. On the private authorization page hosted by your server, enter the separate access password and approve.
 5. Test with a low-risk request such as “读取我的 Garmin 个人资料”。
 
@@ -286,10 +290,11 @@ See OpenAI's official [plugin quickstart](https://developers.openai.com/plugins/
 
 | Variable | Default | Description |
 |---|---:|---|
-| `GARMIN_SESSION_TOKEN` | — | JSON token created by `scripts/export-session.ts` |
-| `GARMIN_SESSION_TOKEN_B64` | — | Base64-encoded session token; convenient for systemd environment files |
 | `GARMIN_USERNAME` | — | Garmin Connect email/username |
-| `GARMIN_PASSWORD` | — | Garmin Connect password |
+| `GARMIN_SESSION_TOKEN_FILE` | `~/.config/garmin-connect-mcp/session.json` | Absolute path override for the single private, bound DI session |
+| `GARMIN_PASSWORD` | — | Garmin Connect password; use only for initial bootstrap or reauthentication, then remove |
+| `GARMIN_SESSION_TOKEN` | — | Legacy inline JSON session accepted for migration |
+| `GARMIN_SESSION_TOKEN_B64` | — | Legacy Base64 inline session accepted for migration/systemd compatibility |
 | `GARMIN_REGION` | `global` | `global` (`garmin.com`) or `cn` (`garmin.cn`) |
 | `GARMIN_CACHE_TTL` | `300` | In-memory cache lifetime in seconds; `0` disables caching |
 | `GARMIN_CACHE_MAX_ENTRIES` | `100` | Maximum cached query count |
@@ -314,12 +319,13 @@ See OpenAI's official [plugin quickstart](https://developers.openai.com/plugins/
 | `MCP_OAUTH_ACCESS_TOKEN_TTL` | `3600` | Built-in fallback access-token lifetime in seconds |
 | `MCP_OAUTH_REFRESH_TOKEN_TTL` | `7776000` | Built-in fallback refresh-token lifetime in seconds (90 days) |
 
-The client de-duplicates concurrent requests, caches successful responses, refreshes current DI sessions with their refresh token, remains compatible with legacy OAuth1/OAuth2 sessions, reconnects after a `401` or `403`, and applies bounded exponential backoff after a `429`. If Garmin revokes the long-lived token, run the export script again.
+The client de-duplicates concurrent requests, caches successful responses, refreshes the private DI session and atomically persists rotated credentials before use, verifies username/region/profile binding, remains compatible with legacy OAuth1/OAuth2 sessions for migration, reconnects once after a `401` or `403`, and applies bounded exponential backoff after a `429`. If Garmin revokes the long-lived token, temporarily restore `GARMIN_PASSWORD` and run the export script again with `--force-login`.
 
 ## Development
 
 ```bash
 npm run build
+npm test
 npm run smoke:metrics
 npm run smoke:http
 npm run smoke:auth0
@@ -331,7 +337,7 @@ The server writes protocol messages only to stdout. Runtime diagnostics go to st
 
 ## Acknowledgements
 
-The client/cache/formatting design was informed by [Likenttt/garmin-connect-plugin-for-dsh](https://github.com/Likenttt/garmin-connect-plugin-for-dsh), an MIT-licensed Garmin integration. This repository is a standalone MCP implementation and does not retain its DeepSeek Harness or Cordis dependencies.
+The client/cache/formatting design, running-workout knowledge cards, four training-philosophy lenses, safety-gated intake, and private DI-session hardening were informed by [Likenttt/garmin-connect-plugin-for-dsh](https://github.com/Likenttt/garmin-connect-plugin-for-dsh), an MIT-licensed Garmin integration. This repository is a standalone single-user MCP implementation and does not retain its DeepSeek Harness, Cordis, or multi-user features.
 
 The MFA-capable iOS SSO and DI OAuth flow follows protocol behavior documented by the MIT-licensed [python-garminconnect](https://github.com/cyberjunky/python-garminconnect), [garth](https://github.com/matin/garth), and [garmin-connect](https://github.com/Pythe1337N/garmin-connect) projects.
 

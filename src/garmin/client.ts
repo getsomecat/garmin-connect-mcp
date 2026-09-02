@@ -3,6 +3,7 @@ import type { Config, LogLevel } from '../config.js'
 import { MemoryCache } from '../utils/cache.js'
 import {
   garminApiHeaders,
+  getSessionProfileIdentity,
   isDiSessionToken,
   loginForSession,
   parseSessionToken,
@@ -10,6 +11,18 @@ import {
   sessionNeedsRefresh,
   type GarminSessionToken,
 } from './auth.js'
+import {
+  acquireSessionLease,
+  assertBoundSessionAccount,
+  assertBoundSessionProfile,
+  createBoundDiSession,
+  readPrivateSessionFile,
+  SessionFileMissingError,
+  updateBoundDiSession,
+  writePrivateSessionFile,
+  type BoundDiSessionFile,
+  type SessionLease,
+} from './session-store.js'
 
 const { GarminConnect } = garminConnectPackage
 type GarminConnectClient = InstanceType<typeof GarminConnect>
@@ -27,6 +40,9 @@ export class GarminClient {
   private connected = false
   private connecting: Promise<void> | undefined
   private sessionToken: GarminSessionToken | undefined
+  private boundSessionFile: BoundDiSessionFile | undefined
+  private sessionLease: SessionLease | undefined
+  private sessionFileChecked = false
 
   constructor(private readonly config: Config) {
     this.client = this.createClient()
@@ -129,6 +145,11 @@ export class GarminClient {
     return JSON.stringify(this.sessionToken ?? this.client.exportToken())
   }
 
+  async close(): Promise<void> {
+    await this.sessionLease?.release()
+    this.sessionLease = undefined
+  }
+
   private async cached<T>(key: string, request: () => Promise<T>): Promise<T> {
     return this.cache.getOrSet(key, () => this.withRetry(request))
   }
@@ -137,6 +158,7 @@ export class GarminClient {
     this.connected = false
     this.client = this.createClient()
     try {
+      await this.loadSessionFileIfNeeded()
       if (this.sessionToken) {
         try {
           const token = await refreshSessionToken(
@@ -144,6 +166,16 @@ export class GarminClient {
             this.config.region,
             forcePasswordLogin,
           )
+          const profile = await getSessionProfileIdentity(token, this.config.region)
+          if (this.boundSessionFile) {
+            assertBoundSessionAccount(
+              this.boundSessionFile,
+              this.requiredUsername(),
+              this.config.region,
+            )
+            assertBoundSessionProfile(this.boundSessionFile, profile.profileId)
+          }
+          await this.persistDiSession(token, profile.profileId)
           this.sessionToken = token
           this.loadSessionToken(token)
           this.log(
@@ -153,10 +185,18 @@ export class GarminClient {
         } catch (error) {
           if (!forcePasswordLogin || !this.config.username || !this.config.password) throw error
           this.log('warn', 'Session refresh failed; reconnecting with username/password.')
-          await this.loginWithPassword()
+          const token = await this.loginWithPassword()
+          const profile = await getSessionProfileIdentity(token, this.config.region)
+          await this.persistDiSession(token, profile.profileId)
+          this.sessionToken = token
+          this.loadSessionToken(token)
         }
       } else {
-        await this.loginWithPassword()
+        const token = await this.loginWithPassword()
+        const profile = await getSessionProfileIdentity(token, this.config.region)
+        await this.persistDiSession(token, profile.profileId)
+        this.sessionToken = token
+        this.loadSessionToken(token)
       }
       this.connected = true
     } catch (error) {
@@ -165,7 +205,7 @@ export class GarminClient {
     }
   }
 
-  private async loginWithPassword(): Promise<void> {
+  private async loginWithPassword(): Promise<GarminSessionToken> {
     if (!this.config.username || !this.config.password) {
       throw new Error('The Garmin session expired and username/password fallback is not configured.')
     }
@@ -181,8 +221,75 @@ export class GarminClient {
         )
       },
     )
-    this.sessionToken = token
-    this.loadSessionToken(token)
+    return token
+  }
+
+  private async loadSessionFileIfNeeded(): Promise<void> {
+    if (this.sessionToken || this.sessionFileChecked || !this.config.sessionTokenFile) return
+    this.sessionFileChecked = true
+    await this.ensureSessionLease()
+    try {
+      const loaded = await readPrivateSessionFile(this.config.sessionTokenFile)
+      if (loaded.boundFile) {
+        assertBoundSessionAccount(
+          loaded.boundFile,
+          this.requiredUsername(),
+          this.config.region,
+        )
+      } else {
+        this.log('warn', 'Loaded an unbound legacy session file; migrate it with npm run export-session.')
+      }
+      this.boundSessionFile = loaded.boundFile
+      this.sessionToken = loaded.token
+    } catch (error) {
+      if (error instanceof SessionFileMissingError && this.config.password) return
+      if (error instanceof SessionFileMissingError) {
+        throw new Error(
+          'Garmin DI session file is missing. Run npm run export-session, or configure GARMIN_PASSWORD for one-time bootstrap.',
+        )
+      }
+      throw error
+    }
+  }
+
+  private async persistDiSession(token: GarminSessionToken, profileId: number): Promise<void> {
+    if (!this.config.sessionTokenFile || !isDiSessionToken(token)) return
+    const username = this.requiredUsername()
+    await this.ensureSessionLease()
+    const candidate = this.boundSessionFile
+      ? updateBoundDiSession(this.boundSessionFile, token)
+      : createBoundDiSession(
+          token,
+          username,
+          this.config.region,
+          profileId,
+        )
+    assertBoundSessionAccount(
+      candidate,
+      username,
+      this.config.region,
+    )
+    assertBoundSessionProfile(candidate, profileId)
+    if (JSON.stringify(candidate) !== JSON.stringify(this.boundSessionFile)) {
+      await writePrivateSessionFile(this.config.sessionTokenFile, candidate)
+    }
+    this.boundSessionFile = candidate
+  }
+
+  private async ensureSessionLease(): Promise<void> {
+    if (this.sessionLease || !this.config.sessionTokenFile) return
+    this.sessionLease = await acquireSessionLease(
+      this.config.sessionTokenFile,
+      this.requiredUsername(),
+      this.config.region,
+    )
+  }
+
+  private requiredUsername(): string {
+    if (!this.config.username) {
+      throw new Error('GARMIN_USERNAME is required for a private bound DI session file.')
+    }
+    return this.config.username
   }
 
   private loadSessionToken(token: GarminSessionToken): void {
@@ -229,14 +336,17 @@ export class GarminClient {
   private async withRetry<T>(request: () => Promise<T>): Promise<T> {
     await this.connect()
 
-    for (let attempt = 0; ; attempt += 1) {
+    let authenticationRetried = false
+    let rateLimitAttempts = 0
+    for (;;) {
       try {
         return await request()
       } catch (error) {
         const status = httpStatus(error)
-        if (attempt >= this.config.retryAttempts) throw error
 
         if (status === 401 || status === 403) {
+          if (authenticationRetried) throw error
+          authenticationRetried = true
           this.log('warn', `Garmin returned ${status}; reconnecting.`)
           this.connected = false
           this.cache.clear()
@@ -245,11 +355,13 @@ export class GarminClient {
         }
 
         if (status === 429) {
+          if (rateLimitAttempts >= this.config.retryAttempts) throw error
           const retryAfter = retryAfterMs(error)
           const exponential = Math.min(
-            this.config.retryBaseDelayMs * (2 ** attempt),
+            this.config.retryBaseDelayMs * (2 ** rateLimitAttempts),
             this.config.retryMaxDelayMs,
           )
+          rateLimitAttempts += 1
           const delay = Math.min(retryAfter ?? exponential, this.config.retryMaxDelayMs)
           this.log('warn', `Garmin rate limit reached; retrying in ${delay}ms.`)
           await sleep(delay)

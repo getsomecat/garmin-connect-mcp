@@ -1,4 +1,8 @@
 import { config as loadDotenv } from 'dotenv'
+import {
+  defaultSessionTokenFile,
+  explicitSessionTokenFile,
+} from './garmin/session-store.js'
 
 loadDotenv({ quiet: true })
 
@@ -29,6 +33,7 @@ export interface Config {
   username?: string
   password?: string
   sessionToken?: string
+  sessionTokenFile?: string
   region: GarminRegion
   cacheTtlSeconds: number
   cacheMaxEntries: number
@@ -51,6 +56,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ?? base64Secret(env.GARMIN_SESSION_TOKEN_B64, 'GARMIN_SESSION_TOKEN_B64')
   const username = optional(env.GARMIN_USERNAME)
   const password = optional(env.GARMIN_PASSWORD)
+  const region = oneOf(env.GARMIN_REGION, ['global', 'cn'], 'global', 'GARMIN_REGION')
+  const configuredSessionFile = optional(env.GARMIN_SESSION_TOKEN_FILE)
+  const sessionTokenFile = configuredSessionFile
+    ? explicitSessionTokenFile(configuredSessionFile)
+    : (!sessionToken && username ? defaultSessionTokenFile(env) : undefined)
   const transport = oneOf(env.MCP_TRANSPORT, ['stdio', 'http'], 'stdio', 'MCP_TRANSPORT')
   const bearerToken = optional(env.MCP_BEARER_TOKEN)
   const auth0 = auth0Config(env)
@@ -60,9 +70,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const oauth = auth0 ? undefined : oauthConfig(env)
   const configuredHttpPath = httpPath(env.MCP_HTTP_PATH)
 
-  if (!sessionToken && !(username && password)) {
+  if (sessionTokenFile && !username) {
+    throw new Error('GARMIN_USERNAME is required when a Garmin session file is configured.')
+  }
+  if (!sessionToken && !sessionTokenFile && !(username && password)) {
     throw new Error(
-      'Garmin credentials are missing. Set GARMIN_SESSION_TOKEN, or set both GARMIN_USERNAME and GARMIN_PASSWORD.',
+      'Garmin credentials are missing. Configure a private session file, a legacy inline session token, or username/password.',
     )
   }
   if (bearerToken && Buffer.byteLength(bearerToken, 'utf8') < 32) {
@@ -82,7 +95,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(username ? { username } : {}),
     ...(password ? { password } : {}),
     ...(sessionToken ? { sessionToken } : {}),
-    region: oneOf(env.GARMIN_REGION, ['global', 'cn'], 'global', 'GARMIN_REGION'),
+    ...(sessionTokenFile ? { sessionTokenFile } : {}),
+    region,
     cacheTtlSeconds: integer(env.GARMIN_CACHE_TTL, 300, 0, 86_400, 'GARMIN_CACHE_TTL'),
     cacheMaxEntries: integer(env.GARMIN_CACHE_MAX_ENTRIES, 100, 1, 10_000, 'GARMIN_CACHE_MAX_ENTRIES'),
     retryAttempts: integer(env.GARMIN_RETRY_ATTEMPTS, 3, 0, 10, 'GARMIN_RETRY_ATTEMPTS'),

@@ -15,12 +15,13 @@ export function createServer(config: Config, client: GarminClient = new GarminCl
   const toolsByName = new Map(tools.map((tool) => [tool.definition.name, tool]))
 
   const server = new Server(
-    { name: 'garmin-connect-mcp', version: '0.2.0' },
+    { name: 'garmin-connect-mcp', version: '0.3.0' },
     {
       capabilities: { tools: {} },
       instructions:
         'Use Garmin tools only for the connected user\'s fitness and health questions. '
-        + 'Date ranges are inclusive and limited to 31 days. All tools are read-only.',
+        + 'Date ranges are inclusive and limited to 31 days. All tools are read-only. '
+        + 'Use garmin_running_advice for coaching concepts or athlete-specific advice; personalized advice must complete its intake and safety gate.',
     },
   )
 

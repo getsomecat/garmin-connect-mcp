@@ -2,7 +2,7 @@
 
 这是一份面向个人用户的完整部署教程。它只假设你已经拥有一台可通过 SSH 管理的 VPS 和一个可以修改 DNS 的域名；从域名解析、Nginx/HTTPS、Node.js、Garmin 登录、Auth0 OAuth，一直到 ChatGPT 和 Codex 连接都会覆盖。
 
-本文来自一套实际完成并验证的部署：Ubuntu 24.04、1 核 CPU、约 2 GB 内存、同机已有 Nginx/Hexo、Garmin 中国区账号、Auth0 OAuth、ChatGPT 个人插件和 Codex 远程 MCP。最终由客户端发现并成功调用全部十二个只读工具。没有网站的空白 VPS 也可以照做；已有博客只是本教程特别处理的一种兼容场景。文中的域名、账号、用户 ID、回调 ID 和令牌均为占位符。
+本文来自一套实际完成并验证的部署：Ubuntu 24.04、1 核 CPU、约 2 GB 内存、同机已有 Nginx/Hexo、Garmin 中国区账号、Auth0 OAuth、ChatGPT 个人插件和 Codex 远程 MCP。当前版本由客户端发现十三个只读工具，并把 Garmin 凭据升级为自动刷新的单用户私有 DI Session。没有网站的空白 VPS 也可以照做；已有博客只是本教程特别处理的一种兼容场景。文中的域名、账号、用户 ID、回调 ID 和令牌均为占位符。
 
 > 适用范围：一个 Garmin 账号、一个所有者、只读查询。它不是面向公众注册的多租户 SaaS。Garmin 使用的是非官方 Web API，未来可能因 Garmin 接口变更而需要更新项目。
 
@@ -19,7 +19,7 @@
 - 你的电脑关机后，VPS 上的服务仍可使用；
 - 在任何新对话中重新选择 Garmin Connect 即可，不必永远留在同一个对话。
 
-项目提供十二个只读工具：
+项目提供十三个只读工具：
 
 | 工具 | 用途 |
 |---|---|
@@ -35,10 +35,13 @@
 | `garmin_training_readiness` | 训练准备度、恢复时间及各影响因素 |
 | `garmin_training_status` | 训练状态、急性/慢性负荷、负荷比和负荷平衡 |
 | `garmin_vo2max` | 跑步/骑行 VO₂max 当前值及历史趋势 |
+| `garmin_running_advice` | 解释 8 种课型和 Hansons、丹尼尔斯、挪威阈值、极化训练；个性化建议必须先完成完整问询和健康风险保护 |
 
 日期范围最多为 31 天。
 
-后五项指标需要兼容的 Garmin 设备和足够的已同步历史。Garmin Connect 尚未计算某项指标时，工具会返回 `hasData: false` 或空字段，而不是把缺失值当成 0。`garmin_body_battery` 默认只返回每日摘要；只有查询单日时才可通过 `include_samples=true` 获取日内曲线。
+HRV、Body Battery、训练准备度、训练状态和 VO₂max 需要兼容的 Garmin 设备和足够的已同步历史。Garmin Connect 尚未计算某项指标时，工具会返回 `hasData: false` 或空字段，而不是把缺失值当成 0。`garmin_body_battery` 默认只返回每日摘要；只有查询单日时才可通过 `include_samples=true` 获取日内曲线。
+
+`garmin_running_advice` 的 `explain` 模式只解释训练概念；`personalized` 模式必须先收集目标、当前成绩依据、训练背景、时间条件、健康与恢复、警示症状、负荷偏好、每周质量课上限和强度执行偏好。信息缺失或矛盾时只返回追问，不猜测训练量、VDOT 或阈值配速。若报告胸部不适、轻微活动异常气短、晕厥/眩晕或异常心悸，工具会在读取 Garmin 活动和生成训练内容之前停止，并建议先取得医疗许可；它不提供诊断，也不能替代医疗服务。
 
 ## 架构和三种凭据
 
@@ -52,18 +55,18 @@ flowchart LR
     X -.->|可选 static Bearer| N
     B[原网站，可选] <-->|原有站点路由| N
     N -->|127.0.0.1:3100| M[Garmin MCP Server]
-    M -->|Garmin session token| G
+    M -->|单用户私有 DI Session| G
 ```
 
 部署中会遇到三种不同的凭据，绝对不要混用：
 
 | 凭据 | 存放位置 | 用途 |
 |---|---|---|
-| Garmin session token | VPS 的受限环境文件 | MCP 代表你读取 Garmin 数据 |
+| Garmin 私有 DI Session 文件 | VPS 的 `/var/lib/garmin-connect-mcp/session.json` | MCP 代表你读取 Garmin 数据；自动刷新并安全写回 |
 | MCP static Bearer | VPS 和使用它的客户端 | 可选的兼容回退，不是 OAuth 的必需项 |
 | Auth0 用户和 access token | Auth0/ChatGPT OAuth 流程 | 确认是哪位用户正在访问 MCP |
 
-不要把 Garmin session token 当成 MCP Bearer，也不要把 Garmin 密码输入 Auth0 登录页。任何一种令牌都不要提交到 Git、粘贴进聊天或写进 Nginx 配置。
+不要把 Garmin session 当成 MCP Bearer，也不要把 Garmin 密码输入 Auth0 登录页。任何一种令牌都不要提交到 Git、粘贴进聊天或写进 Nginx 配置。这个项目是一个 Garmin 账号对应一个服务实例，没有账号选择或多用户模式；ChatGPT 和 Codex 可以同时连接同一个 HTTP 服务进程，但不要再启动第二个 MCP 进程共用同一 session 文件。
 
 ## 1. 准备 VPS、域名和 HTTPS
 
@@ -209,14 +212,15 @@ sudo chown -R garmin-mcp:garmin-mcp /opt/garmin-connect-mcp
 cd /opt/garmin-connect-mcp
 sudo -u garmin-mcp npm ci
 sudo -u garmin-mcp npm run build
+sudo -u garmin-mcp npm test
 sudo -u garmin-mcp npm run smoke:metrics
 sudo -u garmin-mcp npm run smoke:http
 sudo -u garmin-mcp npm run smoke:auth0
 ```
 
-五个命令都成功后再配置真实凭据。`npm run smoke:metrics` 使用合成健康数据，`npm run smoke:auth0` 使用测试配置；两者都不会登录你的 Garmin 或 Auth0 账号。
+构建和测试命令都成功后再配置真实凭据。`npm test` 覆盖训练问询/健康拦截和私有 session 绑定，`npm run smoke:metrics` 使用合成健康数据，`npm run smoke:auth0` 使用测试配置；它们都不会登录你的 Garmin 或 Auth0 账号。
 
-## 3. 在本地电脑导出 Garmin session
+## 3. 在本地电脑创建单用户私有 Garmin session
 
 不要在 VPS 或聊天窗口里反复输入 Garmin 密码。推荐在自己的可信电脑上完成一次登录，再只把导出的 session 传到 VPS。
 
@@ -237,11 +241,11 @@ GARMIN_PASSWORD=your-garmin-password
 GARMIN_REGION=cn
 ```
 
-国际区账号把 `cn` 改为 `global`。然后运行：
+国际区账号把 `cn` 改为 `global`。然后运行（`--output` 必须是绝对路径）：
 
 ```bash
 umask 077
-npm run --silent export-session > garmin-session.json
+npm run --silent export-session -- --output "$PWD/garmin-session.json"
 ```
 
 如果 Garmin 要求 MFA，脚本会提示输入一次性验证码。
@@ -249,15 +253,24 @@ npm run --silent export-session > garmin-session.json
 - 验证码输错：按 `Ctrl+C` 结束，再重新运行导出命令，使用最新验证码；
 - 网页能登录但脚本失败：先检查中国区账号是否设置了 `GARMIN_REGION=cn`；
 - 连续失败多次：停止尝试一段时间，避免触发 Garmin 风控或限流；
-- 成功后，删除 `.env` 中的 `GARMIN_PASSWORD`。
+- 成功后，删除 `.env` 中的 `GARMIN_PASSWORD`；保留 `GARMIN_USERNAME` 和 `GARMIN_REGION`，因为会话与二者绑定。
 
-为避免 JSON 中的引号或换行影响 systemd 环境文件，把 session 转为单行 Base64：
+导出的 JSON 不是普通明文 token 包装：其中含有 DI access/refresh token，并记录 Garmin 区域、标准化用户名哈希和真实 profile ID 哈希。运行时会验证这些绑定；刷新成功后先以原子方式安全写回，再使用新凭据。文件本身仍等同密码，不能发给模型。
+
+通过 SFTP 或 `scp` 把 `garmin-session.json` 传到 VPS 的临时位置，然后在 VPS 上安装为服务用户专用文件：
 
 ```bash
-base64 < garmin-session.json | tr -d '\r\n' > garmin-session.b64
+sudo install -d -o garmin-mcp -g garmin-mcp -m 0700 /var/lib/garmin-connect-mcp
+sudo install -o garmin-mcp -g garmin-mcp -m 0600 /tmp/garmin-session.json /var/lib/garmin-connect-mcp/session.json
 ```
 
-通过 SFTP、`scp` 或你信任的密码管理器把 `garmin-session.b64` 传到 VPS。传输完成并写入服务配置后，删除本地和 VPS 上的临时文件。session 和密码都不要发给模型。
+确认所有者和权限：
+
+```bash
+sudo stat -c '%U:%G %a %n' /var/lib/garmin-connect-mcp /var/lib/garmin-connect-mcp/session.json
+```
+
+预期目录是 `garmin-mcp:garmin-mcp 700`，文件是 `garmin-mcp:garmin-mcp 600`。确认后删除传输临时文件和本地导出副本；正式副本只留在 VPS 受限目录中。如果需要重建，临时恢复密码并执行 `npm run export-session -- --force-login --output "$PWD/garmin-session.json"`。
 
 ## 4. 配置 Auth0
 
@@ -376,7 +389,8 @@ sudoedit /etc/garmin-connect-mcp.env
 写入以下内容，并替换所有占位符：
 
 ```dotenv
-GARMIN_SESSION_TOKEN_B64=PASTE_THE_SINGLE_LINE_BASE64_SESSION_HERE
+GARMIN_USERNAME=your-garmin-email@example.com
+GARMIN_SESSION_TOKEN_FILE=/var/lib/garmin-connect-mcp/session.json
 GARMIN_REGION=cn
 
 GARMIN_CACHE_TTL=300
@@ -406,8 +420,9 @@ MCP_AUTH0_ALLOWED_SUBJECTS=auth0|your-user-id
 - `MCP_AUTH0_DOMAIN` 不包含 `https://` 和路径；
 - `MCP_PUBLIC_URL`、Auth0 API Identifier、`MCP_AUTH0_AUDIENCE` 必须完全相同；
 - Auth0 模式下不要设置任何 `MCP_OAUTH_*` 变量；
-- 如果不使用 Codex，可以省略 `MCP_BEARER_TOKEN`；
-- 不要在这里保留 `GARMIN_USERNAME` 和 `GARMIN_PASSWORD`。
+- ChatGPT 和 Codex 都使用 OAuth 时可以省略 `MCP_BEARER_TOKEN`；
+- 必须保留 `GARMIN_USERNAME` 和 `GARMIN_REGION` 来验证会话绑定，但不要保留 `GARMIN_PASSWORD`；
+- 不要再设置旧的 `GARMIN_SESSION_TOKEN` 或 `GARMIN_SESSION_TOKEN_B64`，除非正在执行一次性迁移。
 
 ## 6. 安装 systemd 服务
 
@@ -513,7 +528,7 @@ OpenAI 官方流程要求先有公网 HTTPS Streamable HTTP MCP endpoint，再�
 6. 在发现/授权页面确认授权服务器是 `https://your-tenant.us.auth0.com/`；
 7. 确认资源是完整 MCP URL，业务权限包含 `garmin:read`；Auth0 还可能显示标准 OIDC 身份 scope；
 8. 使用第 4.3 节创建的 Auth0 用户登录并授权；
-9. 回到插件详情，确认扫描结果为 **12 read**，再安装或启用插件。
+9. 回到插件详情，确认扫描结果为 **13 read**，再安装或启用插件。
 
 第一次测试建议使用不展示个人资料内容的请求：
 
@@ -546,7 +561,7 @@ https://your-domain.example/authorize
 3. 确认新连接发现 Auth0 并成功调用工具；
 4. 再删除旧连接，把新连接改成原来的名称。
 
-修改认证或工具元数据后，先在连接设置中执行 **Refresh**，再开启一个新对话测试。若服务器已经是十二个工具，而插件详情仍固定显示七个，删除旧的个人插件后用同一 URL 创建一个全新插件，让平台生成新的 App ID 并重新扫描；随后在 Auth0 核对新连接实际使用的 CIMD 客户端。反复在旧连接上重试通常不会清除已保存的工具和 OAuth 元数据快照。
+修改认证或工具元数据后，先在连接设置中执行 **Refresh**，再开启一个新对话测试。若服务器已经是十三个工具，而插件详情仍显示七个或十二个，删除旧的个人插件后用同一 URL 创建一个全新插件，让平台生成新的 App ID 并重新扫描；随后在 Auth0 核对新连接实际使用的 CIMD 客户端。反复在旧连接上重试通常不会清除已保存的工具和 OAuth 元数据快照。
 
 ## 9. 让 Codex 通过 OAuth 使用同一 VPS
 
@@ -609,7 +624,7 @@ Successfully logged in to MCP server 'garmin_connect'.
 codex mcp list
 ```
 
-预期 `garmin_connect` 为 `enabled`，`Auth` 为 `OAuth`。完全退出并重新打开 Codex，在输入框执行 `/mcp`，然后确认工具清单为十二个。可用下面的隐私保护测试做端到端验收：
+预期 `garmin_connect` 为 `enabled`，`Auth` 为 `OAuth`。完全退出并重新打开 Codex，在输入框执行 `/mcp`，然后确认工具清单为十三个。可用下面的隐私保护测试做端到端验收：
 
 ```text
 调用 garmin_profile，只告诉我成功或失败以及当前可用工具数量，不要显示个人资料字段。
@@ -659,8 +674,9 @@ launchctl setenv GARMIN_MCP_BEARER_TOKEN "$(tr -d '\r\n' < ~/.codex/secrets/garm
 - [ ] Auth0 只创建了 `garmin:read` 用户委托授权；
 - [ ] 每个实际使用的 ChatGPT/Codex CIMD 客户端都已单独登记并获得用户委托权限；
 - [ ] `MCP_AUTH0_ALLOWED_SUBJECTS` 是自己的准确 User ID；
-- [ ] `npm run smoke:http` 输出 `HTTP smoke test passed with 12 tools.`；
-- [ ] ChatGPT 或 Codex 实际看到十二个工具；
+- [ ] `npm test` 的 8 项回归测试全部通过；
+- [ ] `npm run smoke:http` 输出 `HTTP smoke test passed with 13 tools.`；
+- [ ] ChatGPT 或 Codex 实际看到十三个工具；
 - [ ] 若使用 Codex OAuth，`codex mcp list` 显示 `enabled` 和 `OAuth`；
 - [ ] `garmin_profile` 端到端调用成功；
 - [ ] Git 历史、日志和聊天里没有任何 session、密码或 Bearer。
@@ -681,16 +697,29 @@ launchctl setenv GARMIN_MCP_BEARER_TOKEN "$(tr -d '\r\n' < ~/.codex/secrets/garm
 | ChatGPT 打开本机 `/authorize` 并得到 404 | 旧连接缓存了内置 OAuth 元数据 | 新建一个全新的连接完成 Auth0 发现，验证后再删除旧连接 |
 | ChatGPT 一直转圈，Auth0 日志没有请求 | 客户端缓存、弹窗/代理/浏览器扩展拦截 | 先检查授权 URL 是否为 Auth0；用新连接测试，并在同一浏览器中临时排除拦截 |
 | 界面没有单独的“选择 OAuth”步骤 | 新版客户端会从 MCP metadata 自动发现认证 | 继续创建连接并使用 Authenticate；核对跳转域名是 Auth0 即可 |
-| ChatGPT/Codex 仍只显示原来的七个工具 | 客户端保存了扩展前的工具快照，或服务器尚未更新到 v0.2.0 | 先在 VPS 更新、构建并确认 `smoke:http` 为 12；然后 Refresh/Restart。ChatGPT 个人插件仍不更新时创建全新插件，Codex 则重新启动 host 并检查 `/mcp` |
+| ChatGPT/Codex 仍只显示七个或十二个工具 | 客户端保存了旧工具快照，或服务器尚未更新到 v0.3.0 | 先在 VPS 更新、构建并确认 `smoke:http` 为 13；然后 Refresh/Restart。ChatGPT 个人插件仍不更新时创建全新插件，Codex 则重新启动 host 并检查 `/mcp` |
 | HRV、训练准备度或 VO₂max 返回空值 | 设备不支持、历史不足或数据尚未同步 | 先确认 Garmin Connect App 中能看到该指标，再缩小到最近有记录的日期重试 |
 | Mac ChatGPT 应用意外退出 | 客户端问题，不足以证明服务端 OAuth 失败 | 用网页版完成配置；更新/重开客户端，并以 VPS/Auth0 日志判断请求是否到达 |
-| Garmin session 过期 | Garmin 撤销或失效了长期 session | 在可信电脑重新运行 `export-session`，更新 Base64 后重启服务 |
+| Garmin session 过期或被撤销 | 长期 refresh token 已失效，无法自动刷新 | 在可信电脑临时恢复密码，使用 `export-session -- --force-login` 重建私有文件，安全安装到 VPS 后重启服务 |
 | 加入 MCP 后博客路由异常 | snippet 放错 server 块，或现有 `^~ /` 抢占路径 | 恢复备份、运行 `nginx -t`，只在正确 HTTPS server 中加入 MCP location |
 | 手机端看不到连接 | 客户端版本或工作区策略暂未开放个人开发者连接 | 使用同一账号的网页或桌面端；服务本身仍在 VPS 上运行 |
 
 本地代理确实可能影响浏览器跳转、Cookie 或 Auth0 页面加载，但它不会把 MCP 的 Auth0 配置自动改成本机 `/authorize`。判断时以三类证据为准：浏览器地址栏、Auth0 tenant 日志、VPS Nginx/systemd 日志。若 Auth0 完全没有收到请求且地址栏指向自己的域名，优先排查旧连接缓存。
 
 ## 12. 更新项目
+
+### 从 v0.2 的内联 Session 安全迁移
+
+如果现有 VPS 在 `/etc/garmin-connect-mcp.env` 中使用 `GARMIN_SESSION_TOKEN_B64`，可以先复用它完成一次迁移，不必立即重新输入 Garmin 密码：
+
+1. 暂时保留原来的 `GARMIN_SESSION_TOKEN_B64`；
+2. 同时加入准确的 `GARMIN_USERNAME`、原来的 `GARMIN_REGION` 和 `GARMIN_SESSION_TOKEN_FILE=/var/lib/garmin-connect-mcp/session.json`；
+3. 更新到 v0.3.0、构建、测试并重启服务；
+4. 从 ChatGPT 或 Codex 成功调用一次 `garmin_profile`，触发真实资料 ID 校验和私有文件写入；
+5. 在 VPS 确认 `/var/lib/garmin-connect-mcp/session.json` 存在、归 `garmin-mcp` 所有且权限为 `0600`；
+6. 从环境文件删除 `GARMIN_SESSION_TOKEN_B64`，再次重启并调用 `garmin_profile`。
+
+如果第 5 步没有生成文件，旧凭据可能是不能直接迁移的 OAuth1 格式，或已被 Garmin 撤销。此时不要删除旧配置，先按第 3 节在可信电脑使用 `--force-login` 新建 DI Session。迁移完成后，运行时只使用一个绑定文件并自动写回刷新令牌。
 
 更新前先确认 Git 工作区没有手工改动：
 
@@ -700,6 +729,7 @@ sudo -u garmin-mcp git status --short
 sudo -u garmin-mcp git pull --ff-only origin main
 sudo -u garmin-mcp npm ci
 sudo -u garmin-mcp npm run build
+sudo -u garmin-mcp npm test
 sudo -u garmin-mcp npm run smoke:http
 sudo -u garmin-mcp npm run smoke:auth0
 sudo systemctl restart garmin-connect-mcp
@@ -714,6 +744,7 @@ curl -fsS http://127.0.0.1:3100/healthz
 修改前备份：
 
 - `/etc/garmin-connect-mcp.env`；
+- `/var/lib/garmin-connect-mcp/session.json` 的加密离线备份（不要放进 Git）；
 - 现有 Nginx HTTPS 站点配置；
 - 当前可工作的项目 commit ID；
 - Auth0 API、CIMD 应用和用户授权设置的截图或导出。
@@ -739,6 +770,8 @@ curl -fsS http://127.0.0.1:3100/healthz
 - 不公开 3100，不把 Node 服务绑定到 `0.0.0.0`；
 - 所有公网访问必须经过可信 HTTPS；
 - 环境文件为 `0640`，本地 secret 文件为 `0600`；
+- Garmin session 目录为 `0700`、文件为 `0600`，并由 `garmin-mcp` 服务用户拥有；
+- 保持单个 MCP 服务进程，不要让本地 stdio 与 VPS HTTP 服务共用同一 session 文件；
 - 不在 Nginx、Git、聊天、截图或日志中出现凭据；
 - 怀疑泄露时，立即轮换 MCP Bearer、重新导出 Garmin session，并在 Auth0 撤销会话或授权；
 - 不要把单用户实例开放给其他人，因为所有通过验证的调用最终读取的是同一个 Garmin 账号。
