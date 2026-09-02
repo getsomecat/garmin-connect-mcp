@@ -3,6 +3,7 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { loadConfig, type Config } from './config.js'
 import { startHttpServer, type HttpRuntime } from './http.js'
+import { GarminClient } from './garmin/client.js'
 import { createServer } from './server.js'
 
 async function main(): Promise<void> {
@@ -15,11 +16,16 @@ async function main(): Promise<void> {
 }
 
 async function runStdio(config: Config): Promise<void> {
-  const server = createServer(config)
+  const client = new GarminClient(config)
+  const server = createServer(config, client)
   const transport = new StdioServerTransport()
 
   const shutdown = async (): Promise<void> => {
-    await server.close()
+    try {
+      await server.close()
+    } finally {
+      await client.close()
+    }
   }
   process.once('SIGINT', () => void shutdown())
   process.once('SIGTERM', () => void shutdown())

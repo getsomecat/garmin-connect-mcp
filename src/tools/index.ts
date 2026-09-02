@@ -5,6 +5,7 @@ import { bodyBatteryTool } from './body-battery.js'
 import { heartRateTool } from './heart-rate.js'
 import { hrvTool } from './hrv.js'
 import { profileTool } from './profile.js'
+import { runningAdviceTool } from './running-advice.js'
 import { sleepTool } from './sleep.js'
 import { stepsTool } from './steps.js'
 import { trainingReadinessTool } from './training-readiness.js'
@@ -28,6 +29,7 @@ export function createTools(client: GarminClient, activityDetail: ActivityDetail
     trainingReadinessTool(client),
     trainingStatusTool(client),
     vo2MaxTool(client),
+    runningAdviceTool(client),
   ]
 }
 

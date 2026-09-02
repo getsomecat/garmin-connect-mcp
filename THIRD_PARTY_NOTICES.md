@@ -1,5 +1,12 @@
 # Third-party notices
 
+The running-workout knowledge cards, training-philosophy structure, coaching
+intake safeguards, and private DI-session design in this project are adapted
+from `Likenttt/garmin-connect-plugin-for-dsh`, copyright (c) 2026, under the
+MIT License. The implementation here is a standalone, single-user MCP server
+and does not include that project's DeepSeek Harness, Cordis, or multi-user
+components.
+
 The Garmin mobile SSO and OAuth flow in `src/garmin/auth.ts` follows protocol
 behavior documented by these MIT-licensed projects:
 
@@ -7,7 +14,8 @@ behavior documented by these MIT-licensed projects:
 - `garth`, copyright (c) 2023 Matin Tamizi
 - `garmin-connect`, copyright (c) 2020 Oskar Bernberg
 
-The following license applies to `garth`:
+The following license applies to `garth` and to
+`Likenttt/garmin-connect-plugin-for-dsh`:
 
 > MIT License
 >
@@ -31,6 +39,8 @@ The following license applies to `garth`:
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
-The same MIT terms apply to `python-garminconnect`, copyright (c) 2020-2026
-Ron Klinkien, and to `garmin-connect`, copyright (c) 2020 Oskar Bernberg. This
-project's own license remains the repository's existing MIT LICENSE.
+For `Likenttt/garmin-connect-plugin-for-dsh`, the applicable copyright notice
+is `Copyright (c) 2026`. The same MIT terms apply to `python-garminconnect`,
+copyright (c) 2020-2026 Ron Klinkien, and to `garmin-connect`, copyright (c)
+2020 Oskar Bernberg. This project's own license remains the repository's
+existing MIT LICENSE.

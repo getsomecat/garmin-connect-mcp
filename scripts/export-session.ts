@@ -2,24 +2,125 @@
 
 import readline from 'node:readline'
 import { loadConfig } from '../src/config.js'
-import { loginForSession } from '../src/garmin/auth.js'
+import {
+  getSessionProfileIdentity,
+  isDiSessionToken,
+  loginForSession,
+  parseSessionToken,
+  type GarminSessionToken,
+} from '../src/garmin/auth.js'
 import { GarminClient } from '../src/garmin/client.js'
+import {
+  acquireSessionLease,
+  createBoundDiSession,
+  defaultSessionTokenFile,
+  explicitSessionTokenFile,
+  readPrivateSessionFile,
+  SessionFileMissingError,
+  writePrivateSessionFile,
+} from '../src/garmin/session-store.js'
+
+interface Options {
+  forceLogin: boolean
+  stdout: boolean
+  output?: string
+}
 
 async function main(): Promise<void> {
+  const options = parseOptions(process.argv.slice(2))
   const config = loadConfig()
-  let token: string
-
-  if (!config.sessionToken && config.username && config.password) {
-    const session = await loginForSession(config.username, config.password, config.region, promptMfa)
-    token = JSON.stringify(session)
-  } else {
-    const client = new GarminClient(config)
-    await client.connect()
-    token = await client.exportSession()
+  if (!config.username) {
+    throw new Error('GARMIN_USERNAME is required to bind a private DI session.')
   }
 
-  process.stderr.write('Session token exported. Treat the stdout value as a password.\n')
-  process.stdout.write(`${token}\n`)
+  const destination = options.output
+    ? explicitSessionTokenFile(options.output)
+    : config.sessionTokenFile
+      ?? defaultSessionTokenFile()
+  const lease = await acquireSessionLease(
+    destination,
+    config.username,
+    config.region,
+  )
+  let client: GarminClient | undefined
+
+  try {
+    const sessionFileExists = await privateSessionExists(destination)
+    let token: GarminSessionToken
+    if (options.forceLogin || (!config.sessionToken && !sessionFileExists)) {
+      if (!config.password) {
+        throw new Error(
+          'A new DI session requires GARMIN_PASSWORD. Set it temporarily, run the export, then remove it.',
+        )
+      }
+      token = await loginForSession(
+        config.username,
+        config.password,
+        config.region,
+        promptMfa,
+      )
+    } else {
+      client = new GarminClient({ ...config, sessionTokenFile: destination })
+      await client.connect()
+      token = parseSessionToken(await client.exportSession())
+    }
+
+    if (!isDiSessionToken(token)) {
+      throw new Error(
+        'The configured credential is a legacy OAuth session. Run again with --force-login to create a bound DI v2 session.',
+      )
+    }
+    const profile = await getSessionProfileIdentity(token, config.region)
+    const bound = createBoundDiSession(
+      token,
+      config.username,
+      config.region,
+      profile.profileId,
+    )
+    await writePrivateSessionFile(destination, bound)
+
+    process.stderr.write(
+      `Private Garmin DI session saved for region=${config.region}: ${destination}\n`,
+    )
+    process.stderr.write(
+      'The file is username/region/profile bound and must not be shared by concurrent MCP processes. Remove GARMIN_PASSWORD after verification.\n',
+    )
+    if (options.stdout) {
+      process.stderr.write('Warning: --stdout exposes the session credential. Treat it exactly like a password.\n')
+      process.stdout.write(`${JSON.stringify(bound)}\n`)
+    }
+  } finally {
+    await client?.close()
+    await lease.release()
+  }
+}
+
+async function privateSessionExists(path: string): Promise<boolean> {
+  try {
+    await readPrivateSessionFile(path)
+    return true
+  } catch (error) {
+    if (error instanceof SessionFileMissingError) return false
+    throw error
+  }
+}
+
+function parseOptions(argv: string[]): Options {
+  const options: Options = { forceLogin: false, stdout: false }
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index]
+    if (value === '--force-login') options.forceLogin = true
+    else if (value === '--stdout') options.stdout = true
+    else if (value === '--output') {
+      const output = argv[index + 1]
+      if (!output) throw new Error('--output requires an absolute path.')
+      options.output = output
+      index += 1
+    } else {
+      throw new Error(`Unknown option: ${value ?? ''}`)
+    }
+  }
+  return options
 }
 
 async function promptMfa(method: string): Promise<string> {

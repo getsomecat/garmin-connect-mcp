@@ -48,6 +48,7 @@ try {
     'garmin_training_readiness',
     'garmin_training_status',
     'garmin_vo2max',
+    'garmin_running_advice',
   ]
   const actual = listed.tools.map((tool) => tool.name)
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
